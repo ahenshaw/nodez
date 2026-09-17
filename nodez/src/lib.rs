@@ -82,6 +82,8 @@
 #![forbid(unsafe_code)]
 #![warn(missing_debug_implementations)]
 
+#[cfg(feature = "app")]
+pub mod app;
 pub mod graph;
 pub mod layout;
 pub mod template;

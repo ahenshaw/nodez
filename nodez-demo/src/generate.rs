@@ -6,9 +6,8 @@
 
 use std::collections::HashSet;
 
-use nodez::{EvalContext, Graph, NodeId, Value};
+use nodez::{EvalContext, Graph, NodeId, NodeLibrary, Value};
 
-use crate::domain::Domain;
 use crate::yaml;
 
 /// What one node evaluates to.
@@ -61,11 +60,14 @@ pub struct Generated {
 }
 
 /// Build the config for the graph's stack node.
-pub fn generate(graph: &Graph, domain: &Domain) -> Generated {
+pub fn generate(graph: &Graph, library: &NodeLibrary) -> Generated {
     let mut generated = Generated::default();
 
+    let Some(stack_template) = library.id("stack") else {
+        return generated;
+    };
     let stacks: Vec<NodeId> = graph
-        .nodes_of_template(domain.templates.stack)
+        .nodes_of_template(stack_template)
         .map(|n| n.id)
         .collect();
     let Some(&stack) = stacks.first() else {
@@ -94,7 +96,7 @@ pub fn generate(graph: &Graph, domain: &Domain) -> Generated {
     }
 
     let mut names: Vec<String> = Vec::new();
-    let result = graph.evaluate::<Fragment, String>(&domain.library, stack, |ctx| {
+    let result = graph.evaluate::<Fragment, String>(library, stack, |ctx| {
         let fragment = evaluate_node(&ctx)?;
         if let Fragment::Service { name, .. } = &fragment {
             names.push(name.clone());

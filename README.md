@@ -180,6 +180,27 @@ against an older library is repaired on load by `Graph::validate`, which drops
 nodes whose template is gone and wires that no longer typecheck, and fills in
 values for sockets that have since been added.
 
+## The editor window
+
+`NodeEditor` is just the canvas. The `app` feature adds the surroundings every
+app built on it would otherwise rewrite — a toolbar, a node palette grouped by
+category, a graph inspector, a preview panel and a status bar listing the
+keybindings:
+
+```rust
+nodez::app::EditorApp::new(library)
+    .graph(graph)
+    .title("stack config editor")
+    .file("stack-graph.json")
+    .json_files()
+    .preview(|graph, library| Preview::text(generate(graph, library)))
+    .run()
+```
+
+That is what [`nodez-demo`](nodez-demo/src/main.rs) does; its `main.rs` is 49
+lines, of which the editor window is seven. `EditorApp::ui` draws the same thing
+inside a `Ui` you already have, for embedding it in something larger.
+
 ## Prototype: nodes as Rust types
 
 Behind the non-default `derive` feature is an alternative way to describe a
@@ -200,6 +221,9 @@ struct Service {
 
 impl Evaluate<Config> for Service { .. }   // a fold, so a graph can have several
 ```
+
+`Evaluate` does not restate the output type: it is pinned to the output socket
+the schema declares, since that is what downstream nodes downcast to.
 
 `Rules::register::<Service>()` registers the schema and the rule together, so
 there is no match on template ids and no socket name written twice. Primitive
