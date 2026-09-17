@@ -259,6 +259,7 @@ struct NodeAttrs {
     output: Option<Type>,
     output_name: Option<LitStr>,
     header_color: Option<LitStr>,
+    produces: Option<Type>,
 }
 
 fn node_impl(input: &DeriveInput) -> syn::Result<TokenStream2> {
@@ -283,10 +284,11 @@ fn node_impl(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 "output" => attrs.output = Some(meta.value()?.parse()?),
                 "output_name" => attrs.output_name = Some(meta.value()?.parse()?),
                 "header_color" => attrs.header_color = Some(meta.value()?.parse()?),
+                "produces" => attrs.produces = Some(meta.value()?.parse()?),
                 other => {
                     return Err(meta.error(format!(
                         "unknown node option `{other}`; expected id, label, category, \
-                         description, width, output, output_name or header_color"
+                         description, width, output, output_name, header_color or produces"
                     )));
                 }
             }
@@ -465,9 +467,25 @@ fn node_impl(input: &DeriveInput) -> syn::Result<TokenStream2> {
         None => quote! {},
     };
 
+    // The output socket's type is what downstream nodes downcast to, so the
+    // rule's output type is pinned to it rather than written a second time.
+    let produces = match (&attrs.output, &attrs.produces) {
+        (Some(_), Some(ty)) => {
+            return Err(syn::Error::new_spanned(
+                ty,
+                "a node with an `output` socket already says what it produces; \
+                 `produces` is only for a node that has no output socket",
+            ));
+        }
+        (Some(ty), None) | (None, Some(ty)) => quote!(#ty),
+        (None, None) => quote!(()),
+    };
+
     Ok(quote! {
         impl ::nodez::typed::NodeType for #ident {
             const ID: &'static str = #id;
+
+            type Output = #produces;
 
             fn template(
                 types: &mut ::nodez::TypeRegistry,

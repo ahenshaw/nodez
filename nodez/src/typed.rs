@@ -207,6 +207,14 @@ pub trait NodeType: Sized + 'static {
     /// The template id saved in files. Must be unique in a library.
     const ID: &'static str;
 
+    /// What this kind of node evaluates to.
+    ///
+    /// When the node declares an output socket this is that socket's type, so a
+    /// rule cannot quietly produce something the schema does not advertise —
+    /// which downstream nodes would only discover as a failed downcast. A node
+    /// with no output socket says `produces = T`, or gets `()`.
+    type Output: 'static;
+
     /// Build the template, registering any socket types it mentions.
     fn template(types: &mut TypeRegistry) -> NodeTemplate;
 
@@ -221,9 +229,10 @@ pub trait NodeType: Sized + 'static {
 
 /// A marker naming one way of folding a graph.
 ///
-/// It is the *fold* that is named, not the output type, because different nodes
-/// in the same fold produce different types — an Image yields an image
-/// reference, a Service yields a service definition.
+/// A fold varies the *computation*, not the types: every node still produces
+/// whatever its output socket declares, since that is what downstream nodes
+/// downcast to. Two folds over the same library therefore agree on types and
+/// differ only in how each node arrives at its value.
 ///
 /// ```ignore
 /// struct Config;
@@ -237,9 +246,6 @@ pub trait Fold: 'static {}
 /// emit the config, emit a dependency report, compute a preview — without the
 /// node type having to pick one.
 pub trait Evaluate<F: Fold>: NodeType {
-    /// What this node produces in this fold.
-    type Output: 'static;
-
     fn evaluate(&self) -> Result<Self::Output, NodeError>;
 }
 

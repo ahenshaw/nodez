@@ -164,8 +164,6 @@ struct Config;
 impl Fold for Config {}
 
 impl Evaluate<Config> for Image {
-    type Output = ImageRef;
-
     fn evaluate(&self) -> Result<ImageRef, NodeError> {
         if self.repository.is_empty() {
             return Err(NodeError::custom("Image needs a repository."));
@@ -179,8 +177,6 @@ impl Evaluate<Config> for Image {
 }
 
 impl Evaluate<Config> for Port {
-    type Output = PortMap;
-
     fn evaluate(&self) -> Result<PortMap, NodeError> {
         let (host, container) = (self.host, self.container);
         Ok(PortMap(match self.protocol {
@@ -191,8 +187,6 @@ impl Evaluate<Config> for Port {
 }
 
 impl Evaluate<Config> for EnvVar {
-    type Output = EnvList;
-
     fn evaluate(&self) -> Result<EnvList, NodeError> {
         if self.key.is_empty() {
             return Err(NodeError::custom("Environment Variable needs a key."));
@@ -202,8 +196,6 @@ impl Evaluate<Config> for EnvVar {
 }
 
 impl Evaluate<Config> for EnvFile {
-    type Output = EnvList;
-
     fn evaluate(&self) -> Result<EnvList, NodeError> {
         // Stand-in for parsing the file: one link, several entries.
         Ok(EnvList(vec![
@@ -215,8 +207,6 @@ impl Evaluate<Config> for EnvFile {
 }
 
 impl Evaluate<Config> for Service {
-    type Output = ServiceDef;
-
     fn evaluate(&self) -> Result<ServiceDef, NodeError> {
         let name = self.name.trim();
         if name.is_empty() {
