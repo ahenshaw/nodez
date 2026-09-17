@@ -445,21 +445,15 @@ fn main() {
 
     // Schema and rules, registered together. Forgetting a node is a missing
     // `register` call, not a match arm that silently never fires.
+    type Nodes = (Image, Port, EnvVar, EnvFile, Service);
+
     let mut rules = Rules::<Config>::new();
-    rules.register::<Image>(&mut library);
-    rules.register::<Port>(&mut library);
-    rules.register::<EnvVar>(&mut library);
-    rules.register::<EnvFile>(&mut library);
-    rules.register::<Service>(&mut library);
+    rules.register_all::<Nodes>(&mut library);
 
     // The same node kinds, evaluated against typed storage. The templates are
     // already registered, so this only needs the rules.
     let mut typed_rules = Rules::<Config, StackNode>::new();
-    typed_rules.add::<Image>();
-    typed_rules.add::<Port>();
-    typed_rules.add::<EnvVar>();
-    typed_rules.add::<EnvFile>();
-    typed_rules.add::<Service>();
+    typed_rules.add_all::<Nodes>();
 
     println!("library: {} types, {} templates", library.types.len(), library.len());
     for (_, ty) in library.types.iter() {

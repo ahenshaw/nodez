@@ -339,6 +339,16 @@ impl<F: Fold, N: NodeData> Rules<F, N> {
         );
     }
 
+    /// Register a whole set of node kinds: their schemas and their rules.
+    pub fn register_all<S: NodeSet<F, N>>(&mut self, library: &mut NodeLibrary) {
+        S::register_all(library, self);
+    }
+
+    /// Register a whole set's rules, for templates registered elsewhere.
+    pub fn add_all<S: NodeSet<F, N>>(&mut self) {
+        S::add_all(self);
+    }
+
     /// Run the rule for whatever node the context is on.
     pub fn run(&self, ctx: &EvalContext<'_, Payload, N>) -> Result<Payload, NodeError> {
         let id = ctx.template().id.as_str();
@@ -356,6 +366,58 @@ impl<F: Fold, N: NodeData> Rules<F, N> {
         self.rules.is_empty()
     }
 }
+
+/// A set of node kinds, so a library registers in one call instead of one per
+/// kind.
+///
+/// Implemented for tuples of up to sixteen node types. Longer lists nest, or
+/// call [`Rules::register`] again.
+///
+/// ```ignore
+/// let mut rules = Rules::<Config>::new();
+/// rules.register_all::<(Image, Port, EnvVar, EnvFile, Service)>(&mut library);
+/// ```
+pub trait NodeSet<F: Fold, N: NodeData> {
+    /// Register every kind's schema and its rule.
+    fn register_all(library: &mut NodeLibrary, rules: &mut Rules<F, N>);
+
+    /// Register only the rules, for templates registered elsewhere.
+    fn add_all(rules: &mut Rules<F, N>);
+}
+
+macro_rules! impl_node_set {
+    ($($kind:ident),+) => {
+        impl<F: Fold, N: NodeData, $($kind),+> NodeSet<F, N> for ($($kind,)+)
+        where
+            $($kind: Evaluate<F>),+
+        {
+            fn register_all(library: &mut NodeLibrary, rules: &mut Rules<F, N>) {
+                $(rules.register::<$kind>(library);)+
+            }
+
+            fn add_all(rules: &mut Rules<F, N>) {
+                $(rules.add::<$kind>();)+
+            }
+        }
+    };
+}
+
+impl_node_set!(A);
+impl_node_set!(A, B);
+impl_node_set!(A, B, C);
+impl_node_set!(A, B, C, D);
+impl_node_set!(A, B, C, D, E);
+impl_node_set!(A, B, C, D, E, G);
+impl_node_set!(A, B, C, D, E, G, H);
+impl_node_set!(A, B, C, D, E, G, H, I);
+impl_node_set!(A, B, C, D, E, G, H, I, J);
+impl_node_set!(A, B, C, D, E, G, H, I, J, K);
+impl_node_set!(A, B, C, D, E, G, H, I, J, K, L);
+impl_node_set!(A, B, C, D, E, G, H, I, J, K, L, M);
+impl_node_set!(A, B, C, D, E, G, H, I, J, K, L, M, O);
+impl_node_set!(A, B, C, D, E, G, H, I, J, K, L, M, O, P);
+impl_node_set!(A, B, C, D, E, G, H, I, J, K, L, M, O, P, Q);
+impl_node_set!(A, B, C, D, E, G, H, I, J, K, L, M, O, P, Q, R);
 
 impl<F: Fold, N> fmt::Debug for Rules<F, N> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

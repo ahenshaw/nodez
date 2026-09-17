@@ -109,7 +109,9 @@ pub mod __macro_support {
 #[cfg(feature = "derive")]
 pub use nodez_derive::{NodeType, SocketType};
 #[cfg(feature = "derive")]
-pub use typed::{Evaluate, Fold, Multi, NodeError, NodeType, Payload, Rules, SocketType};
+pub use typed::{
+    Evaluate, Fold, Multi, NodeError, NodeSet, NodeType, Payload, Rules, SocketType,
+};
 
 pub use graph::{
     Connection, ConnectError, ConnectionId, CycleError, DynNode, Graph, Node, NodeData, NodeId,

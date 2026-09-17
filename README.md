@@ -225,8 +225,16 @@ impl Evaluate<Config> for Service { .. }   // a fold, so a graph can have severa
 `Evaluate` does not restate the output type: it is pinned to the output socket
 the schema declares, since that is what downstream nodes downcast to.
 
-`Rules::register::<Service>()` registers the schema and the rule together, so
-there is no match on template ids and no socket name written twice. Primitive
+`Rules` registers schemas and rules together, so there is no match on template
+ids and no socket name written twice. A whole library goes in at once, naming
+the kinds as a tuple:
+
+```rust
+type Nodes = (Image, Port, EnvVar, EnvFile, Service);
+
+let mut rules = Rules::<Config>::new();
+rules.register_all::<Nodes>(&mut library);
+``` Primitive
 types are socket types already, so only types carrying real domain meaning need
 declaring.
 
