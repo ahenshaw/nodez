@@ -20,7 +20,9 @@ use egui::{
     Stroke, StrokeKind, Ui, Vec2, pos2, vec2,
 };
 
-use crate::graph::{ConnectError, Connection, ConnectionId, Graph, NodeId, SocketKind, SocketRef};
+use crate::graph::{
+    ConnectError, Connection, ConnectionId, Graph, NodeData, NodeId, SocketKind, SocketRef,
+};
 use crate::template::{NodeLibrary, TemplateId, Widget};
 use crate::types::DataTypeId;
 
@@ -255,10 +257,10 @@ impl NodeEditor {
     ///
     /// Call this after loading or generating a graph. `screen` is the rect the
     /// editor is drawn in; if you do not have it yet, pass the panel's rect.
-    pub fn fit_to_graph(
+    pub fn fit_to_graph<N: NodeData>(
         &mut self,
         screen: Rect,
-        graph: &Graph,
+        graph: &Graph<N>,
         library: &NodeLibrary,
     ) {
         let style = &self.style;
@@ -275,23 +277,23 @@ impl NodeEditor {
     }
 
     /// Draw the editor, filling the available space.
-    pub fn show(
+    pub fn show<N: NodeData>(
         &mut self,
         ui: &mut Ui,
         library: &NodeLibrary,
-        graph: &mut Graph,
+        graph: &mut Graph<N>,
     ) -> EditorResponse {
         let rect = ui.available_rect_before_wrap();
         self.show_in(ui, rect, library, graph)
     }
 
     /// Draw the editor in an explicit rectangle.
-    pub fn show_in(
+    pub fn show_in<N: NodeData>(
         &mut self,
         ui: &mut Ui,
         rect: Rect,
         library: &NodeLibrary,
-        graph: &mut Graph,
+        graph: &mut Graph<N>,
     ) -> EditorResponse {
         let mut actions = Vec::new();
         self.last_screen = rect;
@@ -466,10 +468,10 @@ impl NodeEditor {
 
     // -------------------------------------------------------------- wires
 
-    fn paint_wires(
+    fn paint_wires<N: NodeData>(
         &self,
         painter: &egui::Painter,
-        graph: &Graph,
+        graph: &Graph<N>,
         library: &NodeLibrary,
         geoms: &[geometry::NodeGeometry],
         zoom: f32,
@@ -498,10 +500,10 @@ impl NodeEditor {
 
     /// The dragged wire, the box-select rectangle and the link-cut line all sit
     /// above the nodes.
-    fn paint_overlays(
+    fn paint_overlays<N: NodeData>(
         &self,
         painter: &egui::Painter,
-        graph: &Graph,
+        graph: &Graph<N>,
         library: &NodeLibrary,
         geoms: &[geometry::NodeGeometry],
         viewport: &Viewport,
@@ -583,12 +585,12 @@ impl NodeEditor {
     // --------------------------------------------------------------- node
 
     #[allow(clippy::too_many_arguments)]
-    fn show_node(
+    fn show_node<N: NodeData>(
         &mut self,
         ui: &mut Ui,
         painter: &egui::Painter,
         base_id: Id,
-        graph: &mut Graph,
+        graph: &mut Graph<N>,
         library: &NodeLibrary,
         geom: &geometry::NodeGeometry,
         viewport: &Viewport,
@@ -852,7 +854,6 @@ impl NodeEditor {
                     let mut value = graph
                         .node(geom.id)
                         .and_then(|n| n.input_value(&spec.name))
-                        .cloned()
                         .unwrap_or_else(|| spec.default.clone());
                     let widget_rect = self.split_row(
                         painter,
@@ -873,7 +874,7 @@ impl NodeEditor {
                         zoom,
                     ) {
                         if let Some(node) = graph.node_mut(geom.id) {
-                            node.input_values.insert(spec.name.clone(), value);
+                            node.set_input_value(&spec.name, value);
                         }
                         actions.push(EditorAction::InputChanged {
                             node: geom.id,
@@ -889,7 +890,6 @@ impl NodeEditor {
                     let mut value = graph
                         .node(geom.id)
                         .and_then(|n| n.param(&spec.name))
-                        .cloned()
                         .unwrap_or_else(|| spec.default.clone());
                     let widget_rect = self.split_row(
                         painter,
@@ -910,7 +910,7 @@ impl NodeEditor {
                         zoom,
                     ) {
                         if let Some(node) = graph.node_mut(geom.id) {
-                            node.params.insert(spec.name.clone(), value);
+                            node.set_param(&spec.name, value);
                         }
                         actions.push(EditorAction::ParamChanged {
                             node: geom.id,
@@ -1035,9 +1035,9 @@ impl NodeEditor {
     }
 
     /// The wire nearest the pointer, within a few points of it.
-    fn wire_at(
+    fn wire_at<N: NodeData>(
         &self,
-        graph: &Graph,
+        graph: &Graph<N>,
         geoms: &[geometry::NodeGeometry],
         pointer: Pos2,
         zoom: f32,
@@ -1061,9 +1061,9 @@ impl NodeEditor {
         best.map(|(_, id)| id)
     }
 
-    fn socket_state(
+    fn socket_state<N: NodeData>(
         &self,
-        graph: &Graph,
+        graph: &Graph<N>,
         library: &NodeLibrary,
         socket: &geometry::SocketGeometry,
         node: NodeId,
@@ -1103,9 +1103,9 @@ impl NodeEditor {
         }
     }
 
-    fn start_link_drag(
+    fn start_link_drag<N: NodeData>(
         &mut self,
-        graph: &Graph,
+        graph: &Graph<N>,
         library: &NodeLibrary,
         node: NodeId,
         socket: &geometry::SocketGeometry,
@@ -1139,9 +1139,9 @@ impl NodeEditor {
     }
 
     /// Whether the wire in flight could land on `target`.
-    fn link_would_connect(
+    fn link_would_connect<N: NodeData>(
         &self,
-        graph: &Graph,
+        graph: &Graph<N>,
         library: &NodeLibrary,
         anchor: &SocketRef,
         anchor_is_output: bool,
@@ -1304,10 +1304,10 @@ impl NodeEditor {
         }
     }
 
-    fn handle_cut(
+    fn handle_cut<N: NodeData>(
         &mut self,
         ui: &Ui,
-        graph: &Graph,
+        graph: &Graph<N>,
         geoms: &[geometry::NodeGeometry],
         viewport: &Viewport,
         ops: &mut Vec<Op>,
@@ -1345,11 +1345,11 @@ impl NodeEditor {
 
     // -------------------------------------------------------- keyboard
 
-    fn handle_keyboard(
+    fn handle_keyboard<N: NodeData>(
         &mut self,
         ui: &Ui,
         background: &Response,
-        graph: &Graph,
+        graph: &Graph<N>,
         viewport: &Viewport,
         ops: &mut Vec<Op>,
     ) {
@@ -1419,7 +1419,12 @@ impl NodeEditor {
     }
 
     /// Modal `G`: the selection follows the pointer until a click confirms.
-    fn run_grab(&mut self, ui: &Ui, graph: &mut Graph, actions: &mut Vec<EditorAction>) {
+    fn run_grab<N: NodeData>(
+        &mut self,
+        ui: &Ui,
+        graph: &mut Graph<N>,
+        actions: &mut Vec<EditorAction>,
+    ) {
         let Interaction::Grab { start, origins } = &self.state.interaction else {
             return;
         };
@@ -1477,10 +1482,10 @@ impl NodeEditor {
 
     // ------------------------------------------------------------- ops
 
-    fn apply(
+    fn apply<N: NodeData>(
         &mut self,
         ops: Vec<Op>,
-        graph: &mut Graph,
+        graph: &mut Graph<N>,
         library: &NodeLibrary,
         actions: &mut Vec<EditorAction>,
     ) -> bool {
@@ -1491,10 +1496,10 @@ impl NodeEditor {
         changed
     }
 
-    fn apply_one(
+    fn apply_one<N: NodeData>(
         &mut self,
         op: Op,
-        graph: &mut Graph,
+        graph: &mut Graph<N>,
         library: &NodeLibrary,
         actions: &mut Vec<EditorAction>,
     ) -> bool {
@@ -1668,9 +1673,9 @@ impl NodeEditor {
     }
 
     /// Wire a freshly added node to whatever the dropped wire came from.
-    fn auto_connect(
+    fn auto_connect<N: NodeData>(
         &self,
-        graph: &mut Graph,
+        graph: &mut Graph<N>,
         library: &NodeLibrary,
         node: NodeId,
         link: &LinkFilter,
@@ -1704,7 +1709,12 @@ impl NodeEditor {
         }
     }
 
-    fn frame(&mut self, graph: &Graph, library: &NodeLibrary, subset: Option<&HashSet<NodeId>>) {
+    fn frame<N: NodeData>(
+        &mut self,
+        graph: &Graph<N>,
+        library: &NodeLibrary,
+        subset: Option<&HashSet<NodeId>>,
+    ) {
         let style = &self.style;
         let mut bounds: Option<Rect> = None;
         for node in graph.nodes() {

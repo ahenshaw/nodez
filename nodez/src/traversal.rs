@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use crate::graph::{Connection, CycleError, Graph, Node, NodeId, SocketRef};
+use crate::graph::{Connection, CycleError, DynNode, Graph, Node, NodeData, NodeId, SocketRef};
 use crate::template::{NodeLibrary, NodeTemplate};
 use crate::value::Value;
 
@@ -32,7 +32,7 @@ impl Direction {
 #[derive(Clone, Debug)]
 pub enum InputSource<'a> {
     /// Nothing is wired in; this is the socket's inline value.
-    Literal(&'a Value),
+    Literal(Value),
     /// One or more wires feed this socket, in connection order.
     Linked(Vec<&'a Connection>),
     /// Nothing is wired in and the socket has no inline value.
@@ -40,7 +40,7 @@ pub enum InputSource<'a> {
 }
 
 impl<'a> InputSource<'a> {
-    pub fn literal(&self) -> Option<&'a Value> {
+    pub fn literal(&self) -> Option<&Value> {
         match self {
             Self::Literal(v) => Some(v),
             _ => None,
@@ -59,7 +59,7 @@ impl<'a> InputSource<'a> {
     }
 }
 
-impl Graph {
+impl<N: NodeData> Graph<N> {
     // ------------------------------------------------------ socket queries
 
     /// Every wire arriving at a node, in connection order.
@@ -137,7 +137,7 @@ impl Graph {
         match library
             .get(node.template)
             .and_then(|t| t.input_spec(socket))
-            .map(|s| &s.default)
+            .map(|s| s.default.clone())
         {
             Some(default) if !default.is_null() => InputSource::Literal(default),
             _ => InputSource::Unset,
@@ -146,18 +146,13 @@ impl Graph {
 
     /// The effective value of a node parameter, falling back to the template
     /// default when the node has no stored value.
-    pub fn param<'a>(
-        &'a self,
-        library: &'a NodeLibrary,
-        node: NodeId,
-        name: &str,
-    ) -> Option<&'a Value> {
+    pub fn param(&self, library: &NodeLibrary, node: NodeId, name: &str) -> Option<Value> {
         let node = self.node(node)?;
         node.param(name).or_else(|| {
             library
                 .get(node.template)
                 .and_then(|t| t.param_spec(name))
-                .map(|p| &p.default)
+                .map(|p| p.default.clone())
         })
     }
 
@@ -214,7 +209,7 @@ impl Graph {
     /// Breadth-first walk from `start`, not including `start` itself.
     ///
     /// The same node is yielded at most once.
-    pub fn walk(&self, start: NodeId, direction: Direction) -> Walk<'_> {
+    pub fn walk(&self, start: NodeId, direction: Direction) -> Walk<'_, N> {
         let mut queue = VecDeque::new();
         let mut seen = HashSet::new();
         seen.insert(start);
@@ -232,12 +227,12 @@ impl Graph {
     }
 
     /// Every node this one transitively depends on.
-    pub fn ancestors(&self, node: NodeId) -> Walk<'_> {
+    pub fn ancestors(&self, node: NodeId) -> Walk<'_, N> {
         self.walk(node, Direction::Upstream)
     }
 
     /// Every node that transitively depends on this one.
-    pub fn descendants(&self, node: NodeId) -> Walk<'_> {
+    pub fn descendants(&self, node: NodeId) -> Walk<'_, N> {
         self.walk(node, Direction::Downstream)
     }
 
@@ -291,7 +286,7 @@ impl Graph {
     }
 
     /// [`Graph::topological_order`] as an iterator.
-    pub fn iter_topological(&self) -> Result<Topological<'_>, CycleError> {
+    pub fn iter_topological(&self) -> Result<Topological<'_, N>, CycleError> {
         Ok(Topological {
             graph: self,
             order: self.topological_order()?.into_iter(),
@@ -430,7 +425,7 @@ impl Graph {
     pub fn evaluate_all<T, E>(
         &self,
         library: &NodeLibrary,
-        mut f: impl FnMut(EvalContext<'_, T>) -> Result<T, E>,
+        mut f: impl FnMut(EvalContext<'_, T, N>) -> Result<T, E>,
     ) -> Result<HashMap<NodeId, T>, EvalError<E>> {
         let order = self.topological_order().map_err(EvalError::Cycle)?;
         self.evaluate_order(library, &order, &mut f)
@@ -441,7 +436,7 @@ impl Graph {
         &self,
         library: &NodeLibrary,
         target: NodeId,
-        mut f: impl FnMut(EvalContext<'_, T>) -> Result<T, E>,
+        mut f: impl FnMut(EvalContext<'_, T, N>) -> Result<T, E>,
     ) -> Result<T, EvalError<E>> {
         if !self.contains_node(target) {
             return Err(EvalError::MissingNode(target));
@@ -455,7 +450,7 @@ impl Graph {
         &self,
         library: &NodeLibrary,
         order: &[NodeId],
-        f: &mut impl FnMut(EvalContext<'_, T>) -> Result<T, E>,
+        f: &mut impl FnMut(EvalContext<'_, T, N>) -> Result<T, E>,
     ) -> Result<HashMap<NodeId, T>, EvalError<E>> {
         let mut results: HashMap<NodeId, T> = HashMap::with_capacity(order.len());
         for &id in order {
@@ -479,7 +474,7 @@ impl Graph {
     /// Visit every node in dependency order without accumulating results.
     pub fn for_each_topological<E>(
         &self,
-        mut f: impl FnMut(&Node) -> Result<(), E>,
+        mut f: impl FnMut(&Node<N>) -> Result<(), E>,
     ) -> Result<(), EvalError<E>> {
         for id in self.topological_order().map_err(EvalError::Cycle)? {
             let node = self.node(id).ok_or(EvalError::MissingNode(id))?;
@@ -491,14 +486,14 @@ impl Graph {
 
 /// A breadth-first walk produced by [`Graph::walk`].
 #[derive(Debug)]
-pub struct Walk<'a> {
-    graph: &'a Graph,
+pub struct Walk<'a, N = DynNode> {
+    graph: &'a Graph<N>,
     direction: Direction,
     queue: VecDeque<NodeId>,
     seen: HashSet<NodeId>,
 }
 
-impl Iterator for Walk<'_> {
+impl<N: NodeData> Iterator for Walk<'_, N> {
     type Item = NodeId;
 
     fn next(&mut self) -> Option<NodeId> {
@@ -514,15 +509,15 @@ impl Iterator for Walk<'_> {
 
 /// A topological walk produced by [`Graph::iter_topological`].
 #[derive(Debug)]
-pub struct Topological<'a> {
-    graph: &'a Graph,
+pub struct Topological<'a, N = DynNode> {
+    graph: &'a Graph<N>,
     order: std::vec::IntoIter<NodeId>,
 }
 
-impl<'a> Iterator for Topological<'a> {
-    type Item = &'a Node;
+impl<'a, N: NodeData> Iterator for Topological<'a, N> {
+    type Item = &'a Node<N>;
 
-    fn next(&mut self) -> Option<&'a Node> {
+    fn next(&mut self) -> Option<&'a Node<N>> {
         loop {
             let id = self.order.next()?;
             if let Some(node) = self.graph.node(id) {
@@ -532,7 +527,7 @@ impl<'a> Iterator for Topological<'a> {
     }
 }
 
-impl ExactSizeIterator for Topological<'_> {
+impl<N: NodeData> ExactSizeIterator for Topological<'_, N> {
     fn len(&self) -> usize {
         self.order.len()
     }
@@ -550,16 +545,16 @@ pub struct Linked<'a, T> {
 }
 
 /// What an evaluation closure is handed for one node.
-pub struct EvalContext<'a, T> {
-    graph: &'a Graph,
+pub struct EvalContext<'a, T, N = DynNode> {
+    graph: &'a Graph<N>,
     library: &'a NodeLibrary,
-    node: &'a Node,
+    node: &'a Node<N>,
     template: &'a NodeTemplate,
     results: &'a HashMap<NodeId, T>,
 }
 
-impl<'a, T> EvalContext<'a, T> {
-    pub fn graph(&self) -> &'a Graph {
+impl<'a, T, N: NodeData> EvalContext<'a, T, N> {
+    pub fn graph(&self) -> &'a Graph<N> {
         self.graph
     }
 
@@ -567,7 +562,7 @@ impl<'a, T> EvalContext<'a, T> {
         self.library
     }
 
-    pub fn node(&self) -> &'a Node {
+    pub fn node(&self) -> &'a Node<N> {
         self.node
     }
 
@@ -623,18 +618,18 @@ impl<'a, T> EvalContext<'a, T> {
     // ------------------------------------------------------------- values
 
     /// The inline value of an input socket, whether or not it is wired.
-    pub fn literal(&self, socket: &str) -> Option<&'a Value> {
+    pub fn literal(&self, socket: &str) -> Option<Value> {
         self.node.input_value(socket).or_else(|| {
             self.template
                 .input_spec(socket)
-                .map(|s| &s.default)
+                .map(|s| s.default.clone())
                 .filter(|v| !v.is_null())
         })
     }
 
     /// The inline value of an input socket, but only while it is unwired —
     /// mirroring what the editor shows.
-    pub fn unlinked_literal(&self, socket: &str) -> Option<&'a Value> {
+    pub fn unlinked_literal(&self, socket: &str) -> Option<Value> {
         if self.is_linked(socket) {
             None
         } else {
@@ -642,51 +637,52 @@ impl<'a, T> EvalContext<'a, T> {
         }
     }
 
-    pub fn literal_str(&self, socket: &str) -> Option<&'a str> {
-        self.literal(socket).and_then(Value::as_str)
+    pub fn literal_str(&self, socket: &str) -> Option<String> {
+        self.literal(socket)
+            .and_then(|v| v.as_str().map(str::to_owned))
     }
 
     pub fn literal_f64(&self, socket: &str) -> Option<f64> {
-        self.literal(socket).and_then(Value::as_f64)
+        self.literal(socket).as_ref().and_then(Value::as_f64)
     }
 
     pub fn literal_i64(&self, socket: &str) -> Option<i64> {
-        self.literal(socket).and_then(Value::as_i64)
+        self.literal(socket).as_ref().and_then(Value::as_i64)
     }
 
     pub fn literal_bool(&self, socket: &str) -> Option<bool> {
-        self.literal(socket).and_then(Value::as_bool)
+        self.literal(socket).as_ref().and_then(Value::as_bool)
     }
 
     // --------------------------------------------------------- parameters
 
-    pub fn param(&self, name: &str) -> Option<&'a Value> {
+    pub fn param(&self, name: &str) -> Option<Value> {
         self.node.param(name).or_else(|| {
             self.template
                 .param_spec(name)
-                .map(|p| &p.default)
+                .map(|p| p.default.clone())
                 .filter(|v| !v.is_null())
         })
     }
 
-    pub fn param_str(&self, name: &str) -> Option<&'a str> {
-        self.param(name).and_then(Value::as_str)
+    pub fn param_str(&self, name: &str) -> Option<String> {
+        self.param(name).and_then(|v| v.as_str().map(str::to_owned))
     }
 
     pub fn param_f64(&self, name: &str) -> Option<f64> {
-        self.param(name).and_then(Value::as_f64)
+        self.param(name).as_ref().and_then(Value::as_f64)
     }
 
     pub fn param_i64(&self, name: &str) -> Option<i64> {
-        self.param(name).and_then(Value::as_i64)
+        self.param(name).as_ref().and_then(Value::as_i64)
     }
 
     pub fn param_bool(&self, name: &str) -> Option<bool> {
-        self.param(name).and_then(Value::as_bool)
+        self.param(name).as_ref().and_then(Value::as_bool)
     }
 }
 
-impl<T> std::fmt::Debug for EvalContext<'_, T> {
+impl<T, N> std::fmt::Debug for EvalContext<'_, T, N> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EvalContext")
             .field("node", &self.node.id)

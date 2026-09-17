@@ -1,0 +1,15 @@
+[package]
+name = "nodez-derive"
+description = "Derive macros for nodez: describe a node as a Rust struct."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = "2"
+quote = "1"
+proc-macro2 = "1"

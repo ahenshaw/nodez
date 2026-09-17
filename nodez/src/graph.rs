@@ -88,10 +88,100 @@ impl From<&SocketRef> for SocketRef {
     }
 }
 
-/// One node instance.
+/// What a graph stores for each node, beyond its position and title.
+///
+/// [`DynNode`] is the default and the one the editor, serde and
+/// [`Graph::validate`] were built around: maps of [`Value`] keyed by socket
+/// name. A domain that would rather store its own Rust types implements this
+/// trait for them and uses [`Graph<MyNode>`](Graph) instead.
+///
+/// Values cross this boundary owned rather than borrowed, because an
+/// implementation backed by typed fields has no stored `Value` to lend out.
+pub trait NodeData: Clone {
+    /// A fresh instance of a template, carrying its default values.
+    fn new(template: &NodeTemplate) -> Self;
+
+    /// The inline value of an input socket, if it has one.
+    fn input_value(&self, socket: &str) -> Option<Value>;
+
+    fn set_input_value(&mut self, socket: &str, value: Value);
+
+    /// The value of a non-socket parameter.
+    fn param(&self, name: &str) -> Option<Value>;
+
+    fn set_param(&mut self, name: &str, value: Value);
+
+    /// Bring the payload back in line with a template that has since changed.
+    fn reconcile(&mut self, _template: &NodeTemplate) {}
+}
+
+/// The default node payload: values keyed by socket and parameter name.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct DynNode {
+    /// Values for unconnected input sockets, keyed by socket name.
+    pub input_values: BTreeMap<String, Value>,
+    /// Values for non-socket parameters, keyed by parameter name.
+    pub params: BTreeMap<String, Value>,
+}
+
+impl NodeData for DynNode {
+    fn new(template: &NodeTemplate) -> Self {
+        let mut data = Self::default();
+        for socket in &template.inputs {
+            if socket.widget != crate::Widget::None {
+                data.input_values
+                    .insert(socket.name.clone(), socket.default.clone());
+            }
+        }
+        for param in &template.params {
+            data.params.insert(param.name.clone(), param.default.clone());
+        }
+        data
+    }
+
+    fn input_value(&self, socket: &str) -> Option<Value> {
+        self.input_values.get(socket).cloned()
+    }
+
+    fn set_input_value(&mut self, socket: &str, value: Value) {
+        self.input_values.insert(socket.to_owned(), value);
+    }
+
+    fn param(&self, name: &str) -> Option<Value> {
+        self.params.get(name).cloned()
+    }
+
+    fn set_param(&mut self, name: &str, value: Value) {
+        self.params.insert(name.to_owned(), value);
+    }
+
+    fn reconcile(&mut self, template: &NodeTemplate) {
+        self.input_values.retain(|name, _| {
+            template
+                .input_spec(name)
+                .is_some_and(|s| s.widget != crate::Widget::None)
+        });
+        for socket in &template.inputs {
+            if socket.widget != crate::Widget::None {
+                self.input_values
+                    .entry(socket.name.clone())
+                    .or_insert_with(|| socket.default.clone());
+            }
+        }
+        self.params.retain(|name, _| template.param_spec(name).is_some());
+        for param in &template.params {
+            self.params
+                .entry(param.name.clone())
+                .or_insert_with(|| param.default.clone());
+        }
+    }
+}
+
+/// One node instance: where it sits, what it is, and its payload.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Node {
+pub struct Node<N = DynNode> {
     pub id: NodeId,
     pub template: TemplateId,
     /// Shown in the header. Starts as the template label and can be renamed.
@@ -103,28 +193,26 @@ pub struct Node {
     pub collapsed: bool,
     /// Blender's `M`: keep the node but exclude it from evaluation.
     pub muted: bool,
-    /// Values for unconnected input sockets, keyed by socket name.
-    pub input_values: BTreeMap<String, Value>,
-    /// Values for non-socket parameters, keyed by parameter name.
-    pub params: BTreeMap<String, Value>,
+    /// Whatever this domain stores per node.
+    pub data: N,
 }
 
-impl Node {
+impl<N: NodeData> Node<N> {
     /// Value of an unconnected input socket.
-    pub fn input_value(&self, socket: &str) -> Option<&Value> {
-        self.input_values.get(socket)
+    pub fn input_value(&self, socket: &str) -> Option<Value> {
+        self.data.input_value(socket)
     }
 
-    pub fn set_input_value(&mut self, socket: impl Into<String>, value: impl Into<Value>) {
-        self.input_values.insert(socket.into(), value.into());
+    pub fn set_input_value(&mut self, socket: impl AsRef<str>, value: impl Into<Value>) {
+        self.data.set_input_value(socket.as_ref(), value.into());
     }
 
-    pub fn param(&self, name: &str) -> Option<&Value> {
-        self.params.get(name)
+    pub fn param(&self, name: &str) -> Option<Value> {
+        self.data.param(name)
     }
 
-    pub fn set_param(&mut self, name: impl Into<String>, value: impl Into<Value>) {
-        self.params.insert(name.into(), value.into());
+    pub fn set_param(&mut self, name: impl AsRef<str>, value: impl Into<Value>) {
+        self.data.set_param(name.as_ref(), value.into());
     }
 }
 
@@ -184,10 +272,10 @@ fn format_cycle(nodes: &[NodeId]) -> String {
 /// compatible, single-link inputs hold at most one wire, and no edit may
 /// introduce a cycle. That means traversal code can rely on the graph being a
 /// DAG without re-checking.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Graph {
-    nodes: BTreeMap<NodeId, Node>,
+pub struct Graph<N = DynNode> {
+    nodes: BTreeMap<NodeId, Node<N>>,
     connections: BTreeMap<ConnectionId, Connection>,
     /// Back-to-front draw order.
     order: Vec<NodeId>,
@@ -195,11 +283,30 @@ pub struct Graph {
     next_connection: u64,
 }
 
-impl Graph {
+impl<N> Default for Graph<N> {
+    fn default() -> Self {
+        Self {
+            nodes: BTreeMap::new(),
+            connections: BTreeMap::new(),
+            order: Vec::new(),
+            next_node: 0,
+            next_connection: 0,
+        }
+    }
+}
+
+impl Graph<DynNode> {
+    /// An empty graph with the default payload.
+    ///
+    /// A default type parameter does not take part in inference at a call site
+    /// like `Graph::new()`, so this constructor is pinned to [`DynNode`]. A
+    /// graph with its own payload is built with `Graph::<MyNode>::default()`.
     pub fn new() -> Self {
         Self::default()
     }
+}
 
+impl<N: NodeData> Graph<N> {
     // ---------------------------------------------------------------- nodes
 
     /// Add a node of the given template at `position`, filling in the
@@ -214,7 +321,7 @@ impl Graph {
         let id = NodeId(self.next_node);
         self.next_node += 1;
 
-        let mut node = Node {
+        let node = Node {
             id,
             template,
             title: spec.label.clone(),
@@ -222,18 +329,8 @@ impl Graph {
             width: spec.width,
             collapsed: false,
             muted: false,
-            input_values: BTreeMap::new(),
-            params: BTreeMap::new(),
+            data: N::new(spec),
         };
-        for socket in &spec.inputs {
-            if socket.widget != crate::Widget::None {
-                node.input_values
-                    .insert(socket.name.clone(), socket.default.clone());
-            }
-        }
-        for param in &spec.params {
-            node.params.insert(param.name.clone(), param.default.clone());
-        }
 
         self.nodes.insert(id, node);
         self.order.push(id);
@@ -242,7 +339,7 @@ impl Graph {
 
     /// Insert a pre-built node, for instance when pasting. The node is given a
     /// fresh id, which is returned.
-    pub fn insert_node(&mut self, mut node: Node) -> NodeId {
+    pub fn insert_node(&mut self, mut node: Node<N>) -> NodeId {
         let id = NodeId(self.next_node);
         self.next_node += 1;
         node.id = id;
@@ -252,7 +349,7 @@ impl Graph {
     }
 
     /// Remove a node and every connection touching it.
-    pub fn remove_node(&mut self, id: NodeId) -> Option<Node> {
+    pub fn remove_node(&mut self, id: NodeId) -> Option<Node<N>> {
         let node = self.nodes.remove(&id)?;
         self.connections
             .retain(|_, c| c.from.node != id && c.to.node != id);
@@ -267,11 +364,11 @@ impl Graph {
         Some(self.insert_node(node))
     }
 
-    pub fn node(&self, id: NodeId) -> Option<&Node> {
+    pub fn node(&self, id: NodeId) -> Option<&Node<N>> {
         self.nodes.get(&id)
     }
 
-    pub fn node_mut(&mut self, id: NodeId) -> Option<&mut Node> {
+    pub fn node_mut(&mut self, id: NodeId) -> Option<&mut Node<N>> {
         self.nodes.get_mut(&id)
     }
 
@@ -292,11 +389,11 @@ impl Graph {
     }
 
     /// Nodes in creation order.
-    pub fn nodes(&self) -> impl Iterator<Item = &Node> {
+    pub fn nodes(&self) -> impl Iterator<Item = &Node<N>> {
         self.nodes.values()
     }
 
-    pub fn nodes_mut(&mut self) -> impl Iterator<Item = &mut Node> {
+    pub fn nodes_mut(&mut self) -> impl Iterator<Item = &mut Node<N>> {
         self.nodes.values_mut()
     }
 
@@ -305,7 +402,7 @@ impl Graph {
     }
 
     /// Nodes in back-to-front draw order.
-    pub fn nodes_in_draw_order(&self) -> impl Iterator<Item = &Node> {
+    pub fn nodes_in_draw_order(&self) -> impl Iterator<Item = &Node<N>> {
         self.order.iter().filter_map(|id| self.nodes.get(id))
     }
 
@@ -323,7 +420,7 @@ impl Graph {
     }
 
     /// Every node using the given template.
-    pub fn nodes_of_template(&self, template: TemplateId) -> impl Iterator<Item = &Node> {
+    pub fn nodes_of_template(&self, template: TemplateId) -> impl Iterator<Item = &Node<N>> {
         self.nodes.values().filter(move |n| n.template == template)
     }
 
@@ -487,21 +584,7 @@ impl Graph {
             let Some(tpl) = library.get(node.template) else {
                 continue;
             };
-            node.input_values
-                .retain(|name, _| tpl.input_spec(name).is_some_and(|s| s.widget != crate::Widget::None));
-            for socket in &tpl.inputs {
-                if socket.widget != crate::Widget::None {
-                    node.input_values
-                        .entry(socket.name.clone())
-                        .or_insert_with(|| socket.default.clone());
-                }
-            }
-            node.params.retain(|name, _| tpl.param_spec(name).is_some());
-            for param in &tpl.params {
-                node.params
-                    .entry(param.name.clone())
-                    .or_insert_with(|| param.default.clone());
-            }
+            node.data.reconcile(tpl);
         }
 
         let bad: Vec<_> = self
@@ -601,7 +684,7 @@ impl Graph {
 
     /// The bounding box of a set of nodes in graph space, using each node's
     /// stored width and the supplied height lookup.
-    pub fn bounds(&self, height_of: impl Fn(&Node) -> f32) -> Option<egui::Rect> {
+    pub fn bounds(&self, height_of: impl Fn(&Node<N>) -> f32) -> Option<egui::Rect> {
         let mut bounds: Option<egui::Rect> = None;
         for node in self.nodes.values() {
             let rect = egui::Rect::from_min_size(

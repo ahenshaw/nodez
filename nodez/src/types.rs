@@ -104,6 +104,39 @@ impl DataTypeBuilder {
     }
 }
 
+/// Pick a stable colour for a socket type from its name.
+///
+/// The hue comes from a hash of the name, while saturation and lightness are
+/// fixed, so a palette generated this way reads as one family and a type keeps
+/// its colour for the life of the project. Two names can land on neighbouring
+/// hues; give one of them an explicit colour if that ever matters.
+pub fn auto_color(name: &str) -> Color32 {
+    // FNV-1a: small, stable, and good enough to scatter short names.
+    let mut hash: u32 = 0x811c_9dc5;
+    for byte in name.as_bytes() {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hsl(hash % 360, 0.62, 0.62)
+}
+
+fn hsl(hue_degrees: u32, saturation: f32, lightness: f32) -> Color32 {
+    let chroma = (1.0 - (2.0 * lightness - 1.0).abs()) * saturation;
+    let sector = hue_degrees as f32 / 60.0;
+    let second = chroma * (1.0 - (sector % 2.0 - 1.0).abs());
+    let (r, g, b) = match sector as u32 {
+        0 => (chroma, second, 0.0),
+        1 => (second, chroma, 0.0),
+        2 => (0.0, chroma, second),
+        3 => (0.0, second, chroma),
+        4 => (second, 0.0, chroma),
+        _ => (chroma, 0.0, second),
+    };
+    let base = lightness - chroma / 2.0;
+    let byte = |v: f32| ((v + base) * 255.0).round().clamp(0.0, 255.0) as u8;
+    Color32::from_rgb(byte(r), byte(g), byte(b))
+}
+
 /// Every socket type known to an editor, plus the implicit-conversion graph
 /// between them.
 ///

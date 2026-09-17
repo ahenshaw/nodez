@@ -135,6 +135,7 @@ fn evaluate_node(ctx: &EvalContext<'_, Fragment>) -> Result<Fragment, String> {
         )))),
         "flag" => Ok(Fragment::Scalar(Value::Bool(
             ctx.unlinked_literal("value")
+                .as_ref()
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
         ))),
@@ -143,7 +144,7 @@ fn evaluate_node(ctx: &EvalContext<'_, Fragment>) -> Result<Fragment, String> {
             Ok(Fragment::Scalar(Value::Text(format!("${{{name}}}"))))
         }
         "join" => {
-            let separator = ctx.param_str("separator").unwrap_or_default().to_owned();
+            let separator = ctx.param_str("separator").unwrap_or_default();
             let parts: Vec<String> = ctx
                 .inputs("parts")
                 .iter()
@@ -178,7 +179,7 @@ fn evaluate_node(ctx: &EvalContext<'_, Fragment>) -> Result<Fragment, String> {
         "port" => {
             let host = resolve_number(ctx, "host", 0.0) as i64;
             let container = resolve_number(ctx, "container", 0.0) as i64;
-            let protocol = ctx.param_str("protocol").unwrap_or("tcp");
+            let protocol = ctx.param_str("protocol").unwrap_or_else(|| "tcp".to_owned());
             let mapping = if protocol == "tcp" {
                 format!("{host}:{container}")
             } else {
@@ -208,7 +209,7 @@ fn evaluate_node(ctx: &EvalContext<'_, Fragment>) -> Result<Fragment, String> {
             if name.is_empty() {
                 return Err("Network needs a name.".to_owned());
             }
-            let driver = ctx.param_str("driver").unwrap_or("bridge").to_owned();
+            let driver = ctx.param_str("driver").unwrap_or_else(|| "bridge".to_owned());
             Ok(Fragment::Network {
                 name,
                 body: Value::Map(vec![("driver".to_owned(), Value::Text(driver))]),
@@ -262,8 +263,8 @@ fn build_service(ctx: &EvalContext<'_, Fragment>) -> Result<Fragment, String> {
         body.push(("command".to_owned(), Value::Text(command)));
     }
 
-    if let Some(restart) = ctx.param_str("restart").filter(|r| *r != "no") {
-        body.push(("restart".to_owned(), Value::Text(restart.to_owned())));
+    if let Some(restart) = ctx.param_str("restart").filter(|r| r != "no") {
+        body.push(("restart".to_owned(), Value::Text(restart)));
     }
 
     let replicas = resolve_number(ctx, "replicas", 1.0) as i64;
@@ -353,8 +354,8 @@ fn build_service(ctx: &EvalContext<'_, Fragment>) -> Result<Fragment, String> {
 }
 
 fn build_stack(ctx: &EvalContext<'_, Fragment>) -> Result<Fragment, String> {
-    let version = ctx.param_str("version").unwrap_or("3.9").to_owned();
-    let name = ctx.param_str("name").unwrap_or("stack").trim().to_owned();
+    let version = ctx.param_str("version").unwrap_or_else(|| "3.9".to_owned());
+    let name = ctx.param_str("name").unwrap_or_default().trim().to_owned();
 
     let mut services = Vec::new();
     for link in ctx.inputs("services") {
@@ -411,9 +412,8 @@ fn resolve_text(ctx: &EvalContext<'_, Fragment>, socket: &str) -> String {
         return text;
     }
     ctx.unlinked_literal(socket)
-        .and_then(Value::as_str)
+        .and_then(|value| value.as_str().map(str::to_owned))
         .unwrap_or_default()
-        .to_owned()
 }
 
 fn resolve_number(ctx: &EvalContext<'_, Fragment>, socket: &str, fallback: f64) -> f64 {
@@ -423,6 +423,7 @@ fn resolve_number(ctx: &EvalContext<'_, Fragment>, socket: &str, fallback: f64) 
         return number;
     }
     ctx.unlinked_literal(socket)
+        .as_ref()
         .and_then(Value::as_f64)
         .unwrap_or(fallback)
 }
@@ -437,6 +438,7 @@ fn resolve_flag(ctx: &EvalContext<'_, Fragment>, socket: &str) -> bool {
         }
     }
     ctx.unlinked_literal(socket)
+        .as_ref()
         .and_then(Value::as_bool)
         .unwrap_or(false)
 }

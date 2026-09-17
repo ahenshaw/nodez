@@ -186,7 +186,7 @@ fn evaluation_folds_in_dependency_order() {
                 "text" => ctx.literal_str("value").unwrap_or_default().to_owned(),
                 "number" => ctx.literal_f64("value").unwrap_or_default().to_string(),
                 "join" => {
-                    let separator = ctx.param_str("separator").unwrap_or(" ").to_owned();
+                    let separator = ctx.param_str("separator").unwrap_or_else(|| " ".to_owned());
                     let parts: Vec<&str> =
                         ctx.inputs("parts").iter().map(|l| l.value.as_str()).collect();
                     parts.join(&separator)
@@ -261,7 +261,7 @@ fn input_values_default_from_the_template() {
     let node = graph.add_node(&f.library, f.join, pos2(0.0, 0.0));
     assert_eq!(
         graph.node(node).unwrap().param("separator"),
-        Some(&Value::Text(" ".to_owned()))
+        Some(Value::Text(" ".to_owned()))
     );
 }
 
@@ -323,7 +323,7 @@ fn graphs_round_trip_through_json() {
     assert_eq!(restored.connection_count(), 1);
     assert_eq!(
         restored.node(a).unwrap().input_value("value"),
-        Some(&Value::Text("round trip".to_owned()))
+        Some(Value::Text("round trip".to_owned()))
     );
 
     // Ids must not be handed out again after a load.

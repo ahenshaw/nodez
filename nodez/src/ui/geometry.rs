@@ -6,7 +6,7 @@
 
 use egui::{Pos2, Rect, Vec2, pos2, vec2};
 
-use crate::graph::{Graph, Node, NodeId, SocketKind};
+use crate::graph::{Graph, Node, NodeData, NodeId, SocketKind};
 use crate::template::{NodeLibrary, NodeTemplate, Widget};
 use crate::types::DataTypeId;
 
@@ -129,10 +129,10 @@ struct RowPlan {
     height: f32,
 }
 
-fn row_plan(
-    graph: &Graph,
+fn row_plan<N: NodeData>(
+    graph: &Graph<N>,
     template: &NodeTemplate,
-    node: &Node,
+    node: &Node<N>,
     style: &EditorStyle,
 ) -> Vec<RowPlan> {
     let mut rows = Vec::new();
@@ -179,10 +179,10 @@ fn row_plan(
 ///
 /// Pass this to [`crate::layout::layered`] so automatic layout agrees with what
 /// the editor draws.
-pub fn node_size(
-    graph: &Graph,
+pub fn node_size<N: NodeData>(
+    graph: &Graph<N>,
     library: &NodeLibrary,
-    node: &Node,
+    node: &Node<N>,
     style: &EditorStyle,
 ) -> Vec2 {
     let width = node
@@ -211,10 +211,10 @@ fn collapsed_width(width: f32, style: &EditorStyle) -> f32 {
 }
 
 /// Lay a node out in screen space.
-pub(crate) fn node_geometry(
-    graph: &Graph,
+pub(crate) fn node_geometry<N: NodeData>(
+    graph: &Graph<N>,
     library: &NodeLibrary,
-    node: &Node,
+    node: &Node<N>,
     style: &EditorStyle,
     viewport: &Viewport,
 ) -> NodeGeometry {
@@ -312,10 +312,10 @@ pub(crate) fn node_geometry(
 }
 
 /// A collapsed node keeps its sockets, fanned along the header edges.
-fn collapsed_geometry(
-    graph: &Graph,
+fn collapsed_geometry<N: NodeData>(
+    graph: &Graph<N>,
     template: &NodeTemplate,
-    node: &Node,
+    node: &Node<N>,
     rect: Rect,
     header: Rect,
     body: Rect,

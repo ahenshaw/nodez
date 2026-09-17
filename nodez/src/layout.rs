@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use egui::{Pos2, pos2};
 
-use crate::graph::{CycleError, Graph, Node, NodeId};
+use crate::graph::{CycleError, Graph, Node, NodeData, NodeId};
 
 /// Spacing knobs for [`layered`].
 #[derive(Clone, Copy, Debug)]
@@ -47,10 +47,10 @@ impl Default for LayoutOptions {
 /// .unwrap();
 /// # }
 /// ```
-pub fn layered(
-    graph: &mut Graph,
+pub fn layered<N: NodeData>(
+    graph: &mut Graph<N>,
     options: &LayoutOptions,
-    height_of: impl Fn(&Graph, &Node) -> f32,
+    height_of: impl Fn(&Graph<N>, &Node<N>) -> f32,
 ) -> Result<(), CycleError> {
     let depths = graph.depths()?;
     if depths.is_empty() {
@@ -117,7 +117,11 @@ pub fn layered(
 
 /// One crossing-reduction sweep: order each column by the mean row of the
 /// nodes it connects to in the neighbouring column.
-fn order_by_barycenter(graph: &Graph, columns: &mut [Vec<NodeId>], forward: bool) {
+fn order_by_barycenter<N: NodeData>(
+    graph: &Graph<N>,
+    columns: &mut [Vec<NodeId>],
+    forward: bool,
+) {
     let range: Vec<usize> = if forward {
         (1..columns.len()).collect()
     } else {

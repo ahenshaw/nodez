@@ -86,20 +86,41 @@ pub mod graph;
 pub mod layout;
 pub mod template;
 pub mod traversal;
+#[cfg(feature = "derive")]
+pub mod typed;
 pub mod types;
 pub mod ui;
 pub mod value;
 
+/// Items the derive macros expand to. Not part of the hand-written API.
+#[doc(hidden)]
+#[cfg(feature = "derive")]
+pub mod __macro_support {
+    /// `Color32::from_rgb` as a plain function, so the macro need not import it.
+    pub const fn color(r: u8, g: u8, b: u8) -> egui::Color32 {
+        egui::Color32::from_rgb(r, g, b)
+    }
+}
+
+// The derive macro and the trait it implements deliberately share a name, the
+// way `serde::Serialize` does: one `use nodez::NodeType` brings in both.
+#[cfg(feature = "derive")]
+pub use nodez_derive::{NodeType, SocketType};
+#[cfg(feature = "derive")]
+pub use typed::{Evaluate, Fold, Multi, NodeError, NodeType, Payload, Rules, SocketType};
+
 pub use graph::{
-    Connection, ConnectError, ConnectionId, CycleError, Graph, Node, NodeId, Repairs, SocketKind,
-    SocketRef,
+    Connection, ConnectError, ConnectionId, CycleError, DynNode, Graph, Node, NodeData, NodeId,
+    Repairs, SocketKind, SocketRef,
 };
 pub use layout::{LayoutOptions, layered};
 pub use template::{NodeLibrary, NodeTemplate, ParamSpec, SocketSpec, TemplateId, Widget};
 pub use traversal::{
     Direction, EvalContext, EvalError, InputSource, Linked, Topological, Walk,
 };
-pub use types::{DataType, DataTypeBuilder, DataTypeId, SocketShape, TypeRegistry};
+pub use types::{
+    DataType, DataTypeBuilder, DataTypeId, SocketShape, TypeRegistry, auto_color,
+};
 pub use ui::{
     EditorAction, EditorResponse, EditorState, EditorStyle, NodeEditor, ScrollMode, node_size,
 };
