@@ -195,16 +195,12 @@ fn evaluate_node(ctx: &EvalContext<'_, Fragment>) -> Result<Fragment, String> {
             if target.is_empty() {
                 return Err("Volume needs a target path.".to_owned());
             }
-            let read_only = resolve_flag(ctx, "read_only");
-            let mut entry = vec![
-                ("type".to_owned(), Value::Text("bind".to_owned())),
-                ("source".to_owned(), Value::Text(source)),
-                ("target".to_owned(), Value::Text(target)),
-            ];
-            if read_only {
-                entry.push(("read_only".to_owned(), Value::Bool(true)));
-            }
-            Ok(Fragment::Mount(Value::Map(entry)))
+            let entry = Value::map()
+                .set("type", "bind")
+                .set("source", source)
+                .set("target", target)
+                .set_if(resolve_flag(ctx, "read_only"), "read_only", true);
+            Ok(Fragment::Mount(entry.into()))
         }
         "network" => {
             let name = resolve_text(ctx, "name");
@@ -214,7 +210,7 @@ fn evaluate_node(ctx: &EvalContext<'_, Fragment>) -> Result<Fragment, String> {
             let driver = ctx.param_str("driver").unwrap_or_else(|| "bridge".to_owned());
             Ok(Fragment::Network {
                 name,
-                body: Value::Map(vec![("driver".to_owned(), Value::Text(driver))]),
+                body: Value::map().set("driver", driver).into(),
             })
         }
         "healthcheck" => {
@@ -222,23 +218,14 @@ fn evaluate_node(ctx: &EvalContext<'_, Fragment>) -> Result<Fragment, String> {
             if command.is_empty() {
                 return Err("Health Check needs a command.".to_owned());
             }
-            Ok(Fragment::Health(Value::Map(vec![
-                (
-                    "test".to_owned(),
-                    Value::List(vec![
-                        Value::Text("CMD-SHELL".to_owned()),
-                        Value::Text(command),
-                    ]),
-                ),
-                (
-                    "interval".to_owned(),
-                    Value::Text(format!("{}s", resolve_number(ctx, "interval", 30.0) as i64)),
-                ),
-                (
-                    "retries".to_owned(),
-                    Value::Int(resolve_number(ctx, "retries", 3.0) as i64),
-                ),
-            ])))
+            let probe = Value::map()
+                .set_list("test", ["CMD-SHELL".to_owned(), command])
+                .set(
+                    "interval",
+                    format!("{}s", resolve_number(ctx, "interval", 30.0) as i64),
+                )
+                .set("retries", resolve_number(ctx, "retries", 3.0) as i64);
+            Ok(Fragment::Health(probe.into()))
         }
 
         "service" => build_service(ctx),
@@ -330,54 +317,49 @@ fn collect(
 }
 
 fn build_stack(ctx: &EvalContext<'_, Fragment>) -> Result<Fragment, String> {
-    let version = ctx.param_str("version").unwrap_or_else(|| "3.9".to_owned());
-    let name = ctx.param_str("name").unwrap_or_default().trim().to_owned();
-
-    let mut services = Vec::new();
+    let mut services = nodez::MapBuilder::new();
     for link in ctx.inputs("services") {
         if let Fragment::Service { name, body } = link.value {
-            services.push((name.clone(), body.clone()));
+            services = services.set(name.clone(), body.clone());
         }
     }
 
-    // A service that names a network implies the stack declares it, even if the
-    // network node is not wired to the stack directly.
     let mut networks: Vec<(String, Value)> = Vec::new();
     for link in ctx.inputs("networks") {
         if let Fragment::Network { name, body } = link.value {
             networks.push((name.clone(), body.clone()));
         }
     }
-    for (_, body) in &services {
+
+    // A service that names a network implies the stack declares it, even if the
+    // network node is not wired to the stack directly.
+    let declared: Vec<(String, Value)> = services.clone().entries();
+    for (_, body) in &declared {
         let Some(used) = body.get("networks").and_then(Value::as_list) else {
             continue;
         };
         for entry in used {
-            let Some(used_name) = entry.as_str() else {
-                continue;
-            };
-            if !networks.iter().any(|(n, _)| n == used_name) {
+            let Some(name) = entry.as_str() else { continue };
+            if !networks.iter().any(|(declared, _)| declared == name) {
                 networks.push((
-                    used_name.to_owned(),
-                    Value::Map(vec![(
-                        "driver".to_owned(),
-                        Value::Text("bridge".to_owned()),
-                    )]),
+                    name.to_owned(),
+                    Value::map().set("driver", "bridge").into(),
                 ));
             }
         }
     }
 
-    let mut document = vec![("version".to_owned(), Value::Text(version))];
-    if !name.is_empty() {
-        document.push(("name".to_owned(), Value::Text(name)));
-    }
-    document.push(("services".to_owned(), Value::Map(services)));
-    if !networks.is_empty() {
-        document.push(("networks".to_owned(), Value::Map(networks)));
-    }
+    let name = ctx.param_str("name").unwrap_or_default().trim().to_owned();
+    let document = Value::map()
+        .set(
+            "version",
+            ctx.param_str("version").unwrap_or_else(|| "3.9".to_owned()),
+        )
+        .set_if(!name.is_empty(), "name", name)
+        .set("services", services)
+        .set_map("networks", networks.into_iter().collect());
 
-    Ok(Fragment::Document(Value::Map(document)))
+    Ok(Fragment::Document(document.into()))
 }
 
 /// An input socket's value: whatever is wired in, else the inline literal.
