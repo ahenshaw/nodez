@@ -8,7 +8,7 @@ use nodez::{
 };
 
 // 1. The values that travel along wires. `String`, `i64`, `f64` and `bool` are
-//    already wire types; anything else you declare. The colour comes from the
+//    already wire types; anything else you declare. The color comes from the
 //    name, so there is nothing to choose.
 #[derive(Clone, Debug, SocketType)]
 #[socket(description = "A complete URL.")]

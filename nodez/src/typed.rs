@@ -53,7 +53,7 @@ pub trait SocketType: Clone + 'static {
     /// The name the type is registered under. Must be unique in a library.
     const NAME: &'static str;
 
-    /// Colour, shape and description, as the editor should draw it.
+    /// Color, shape and description, as the editor should draw it.
     fn data_type() -> DataTypeBuilder;
 
     /// The inline editor for an unconnected input. `None` means link-only.
@@ -73,7 +73,7 @@ pub trait SocketType: Clone + 'static {
 }
 
 /// The primitive types are socket types out of the box, so a field that is
-/// just a string or a number needs no wrapper. Their colours follow Blender's
+/// just a string or a number needs no wrapper. Their colors follow Blender's
 /// convention rather than the name hash, since these are the types a reader
 /// sees most often.
 ///

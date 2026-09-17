@@ -1,4 +1,4 @@
-//! Colours and metrics for the editor, defaulting to Blender's dark theme.
+//! Colors and metrics for the editor, defaulting to Blender's dark theme.
 
 use egui::{Color32, Stroke, Vec2};
 
@@ -31,7 +31,7 @@ pub struct EditorStyle {
     pub node_corner_radius: f32,
     pub node_shadow: Color32,
     pub node_shadow_offset: Vec2,
-    /// Header fill when the template and its category name no colour.
+    /// Header fill when the template and its category name no color.
     pub header_fill: Color32,
     pub header_height: f32,
     pub header_text: Color32,
@@ -57,7 +57,7 @@ pub struct EditorStyle {
     /// Vertical spacing between the attachment points of a multi-input socket.
     pub multi_slot_height: f32,
     /// How far the rail behind a multi-input socket's slots is tinted toward
-    /// the socket colour. 0 is the node fill, 1 is the socket colour itself.
+    /// the socket color. 0 is the node fill, 1 is the socket color itself.
     pub multi_slot_track: f32,
     /// Outline drawn around a socket that would accept the wire being dragged.
     pub socket_candidate_outline: Color32,
@@ -74,9 +74,9 @@ pub struct EditorStyle {
     pub wire_curvature: f32,
     pub wire_min_curve: f32,
     pub wire_max_curve: f32,
-    /// Wire colour while a drag is in flight.
+    /// Wire color while a drag is in flight.
     pub wire_dragging: Color32,
-    /// Wire colour when a drag would be refused.
+    /// Wire color when a drag would be refused.
     pub wire_invalid: Color32,
     /// Highlight for wires touching a selected node.
     pub wire_highlight: Color32,

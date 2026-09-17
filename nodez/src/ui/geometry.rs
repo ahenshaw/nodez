@@ -79,7 +79,7 @@ pub struct SocketGeometry {
     pub index: usize,
     pub name: String,
     pub ty: DataTypeId,
-    /// Screen-space centre.
+    /// Screen-space center.
     pub center: Pos2,
     pub linked: bool,
     /// Which attachment point this is, for a multi-input socket.

@@ -33,7 +33,7 @@ use crate::ui::{EditorAction, EditorStyle, NodeEditor, ScrollMode, free_position
 #[derive(Clone, Debug, Default)]
 pub struct Preview {
     pub text: String,
-    /// Shown above the text, in warning colour.
+    /// Shown above the text, in warning color.
     pub problems: Vec<String>,
     /// Nodes that feed the output. Anything else is dimmed in the inspector.
     pub contributing: HashSet<NodeId>,

@@ -32,7 +32,7 @@ impl Default for LayoutOptions {
     }
 }
 
-/// Lay the graph out in columns, one per dependency depth, and centre each
+/// Lay the graph out in columns, one per dependency depth, and center each
 /// column vertically.
 ///
 /// `height_of` supplies each node's drawn height. It is handed the graph as
@@ -116,7 +116,7 @@ pub fn layered<N: NodeData>(
 }
 
 /// One crossing-reduction sweep: order each column by the mean row of the
-/// nodes it connects to in the neighbouring column.
+/// nodes it connects to in the neighboring column.
 fn order_by_barycenter<N: NodeData>(
     graph: &Graph<N>,
     columns: &mut [Vec<NodeId>],

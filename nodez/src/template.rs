@@ -300,9 +300,9 @@ pub struct NodeTemplate {
     /// Stable identifier used by saved graphs.
     pub id: String,
     pub label: String,
-    /// Groups the template in the add-node menu and picks a default header colour.
+    /// Groups the template in the add-node menu and picks a default header color.
     pub category: String,
-    /// Overrides the category colour for this node's header.
+    /// Overrides the category color for this node's header.
     pub header_color: Option<Color32>,
     pub inputs: Vec<SocketSpec>,
     pub outputs: Vec<SocketSpec>,
@@ -394,7 +394,7 @@ impl NodeTemplate {
         self.params.iter().find(|p| p.name == name)
     }
 
-    /// What a derived header colour is keyed on: the category, so that a
+    /// What a derived header color is keyed on: the category, so that a
     /// category reads as one family, or the template's own id when it has no
     /// category to belong to.
     pub fn color_key(&self) -> &str {
@@ -406,7 +406,7 @@ impl NodeTemplate {
     }
 }
 
-/// The catalogue of node templates and the types their sockets speak.
+/// The catalog of node templates and the types their sockets speak.
 #[derive(Debug, Default)]
 pub struct NodeLibrary {
     pub types: TypeRegistry,
@@ -445,7 +445,7 @@ impl NodeLibrary {
         id
     }
 
-    /// Give a category its own header colour in the editor.
+    /// Give a category its own header color in the editor.
     pub fn set_category_color(&mut self, category: impl Into<String>, color: Color32) {
         let category = category.into();
         if !self.category_order.contains(&category) {
@@ -458,11 +458,11 @@ impl NodeLibrary {
         self.category_colors.get(category).copied()
     }
 
-    /// The colour a template's header is drawn in.
+    /// The color a template's header is drawn in.
     ///
-    /// Its own colour if it names one, else its category's if that names one,
+    /// Its own color if it names one, else its category's if that names one,
     /// else one derived from [`NodeTemplate::color_key`] — so a library needs
-    /// no colour choices at all to come out looking deliberate.
+    /// no color choices at all to come out looking deliberate.
     pub fn header_color(&self, template: &NodeTemplate) -> Color32 {
         template
             .header_color

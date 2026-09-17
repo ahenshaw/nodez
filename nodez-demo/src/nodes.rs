@@ -2,13 +2,13 @@
 //!
 //! Each struct here is a kind of node. A field carrying `#[input]` is a socket;
 //! a bare field is a parameter drawn in the node body. The field's *type* gives
-//! the socket type, its colour and whether it can be typed into, and the outer
+//! the socket type, its color and whether it can be typed into, and the outer
 //! wrapper gives the arity — `T` is one required link, `Option<T>` is optional,
 //! `Multi<T>` is a fan-in.
 //!
 //! Replace this file to describe your own config format.
 //!
-//! No colours are chosen here: a socket type's comes from its name and a node
+//! No colors are chosen here: a socket type's comes from its name and a node
 //! header's from its category. Shapes stay explicit, because they mean
 //! something — a diamond is a per-element value, a square a collection.
 
@@ -17,7 +17,7 @@ use nodez::{Evaluate, Fold, Multi, NodeError, NodeType, SocketType, Value};
 // ---------------------------------------------------------------- wire types
 //
 // `String`, `i64` and `bool` are socket types already, so only the types that
-// carry real domain meaning are declared. Colours derive from the type name
+// carry real domain meaning are declared. Colors derive from the type name
 // unless one is given; the shapes are semantic, so they stay explicit.
 
 #[derive(Clone, Debug, SocketType)]

@@ -6,7 +6,7 @@ use nodez::{Evaluate, Fold, Graph, Multi, NodeError, NodeLibrary, NodeType, Payl
             SocketType};
 
 // 1. Values that travel along wires. String, i64, f64 and bool already are
-//    wire types; anything else you declare. The colour comes from the name.
+//    wire types; anything else you declare. The color comes from the name.
 #[derive(Clone, Debug, SocketType)]
 struct Url(String);
 

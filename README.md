@@ -3,7 +3,7 @@
 A Blender-style node editor for [egui](https://github.com/emilk/egui), with a
 typed graph you can walk.
 
-Sockets are colour-coded and typed: the editor refuses a drag between
+Sockets are color-coded and typed: the editor refuses a drag between
 incompatible sockets, and so does the API, so a graph on disk is always
 well-typed. You describe your nodes as Rust structs and the rest is generated.
 
@@ -24,7 +24,7 @@ use nodez::{Evaluate, Fold, Graph, Multi, NodeError, NodeLibrary, NodeType, Payl
             SocketType};
 
 // 1. Values that travel along wires. String, i64, f64 and bool already are
-//    wire types; anything else you declare. The colour comes from the name.
+//    wire types; anything else you declare. The color comes from the name.
 #[derive(Clone, Debug, SocketType)]
 struct Url(String);
 
@@ -181,7 +181,7 @@ quickstart are only what that example chose, and they are unrelated to the fold
 marker beside them. Categories appear in the menu in the order you register
 them, and exist as soon as a node names one.
 
-A node naming no category lands in `Misc` and takes a header colour derived from
+A node naming no category lands in `Misc` and takes a header color derived from
 its own id, so uncategorised nodes stay distinguishable from each other.
 
 ## Controls
@@ -213,7 +213,7 @@ its own id, so uncategorised nodes stay distinguishable from each other.
 |---|---|
 | `nodes()`, `connections()`, `nodes_of_template()` | contents |
 | `incoming()`, `outgoing()`, `links_into()`, `links_from()` | wires at a node or socket |
-| `predecessors()`, `successors()` | immediate neighbours |
+| `predecessors()`, `successors()` | immediate neighbors |
 | `ancestors()`, `descendants()`, `walk()` | transitive walks, as iterators |
 | `roots()`, `sinks()`, `isolated()` | ends of the graph |
 | `topological_order()`, `dependency_order()` | evaluation order |
@@ -229,7 +229,7 @@ graph.connect(&library, (b, "out"), (a, "parts"))        // Err(WouldCycle)
 graph.can_connect(&library, &from, &to)                   // Err: "Text cannot drive Int"
 ```
 
-Graphs serialise with serde, and `Graph::validate` repairs one loaded against a
+Graphs serialize with serde, and `Graph::validate` repairs one loaded against a
 library that has since changed. `nodez::layered` arranges a graph built in code.
 
 ## Just the widget
@@ -246,7 +246,7 @@ if response.changed {
 
 `response.actions` reports what happened — `NodeAdded`, `Connected`,
 `InputChanged`, `ConnectionRejected(..)` — and `editor.state` holds pan, zoom
-and selection. `EditorStyle` holds every colour and metric, defaulting to
+and selection. `EditorStyle` holds every color and metric, defaulting to
 Blender's dark theme; `EditorStyle::light()` is the other preset.
 
 ## The demo

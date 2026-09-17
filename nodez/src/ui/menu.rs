@@ -213,7 +213,7 @@ fn show_grouped(
 /// One row of the list. Returns true when clicked.
 ///
 /// Painted by hand rather than with a button so the label stays left-aligned
-/// next to its colour bar at any width.
+/// next to its color bar at any width.
 fn entry(
     ui: &mut egui::Ui,
     library: &NodeLibrary,

@@ -15,10 +15,10 @@ use nodez::{
 };
 
 // ---------------------------------------------------------------------------
-// Wire types. The colour and shape the editor draws live on the Rust type, so
+// Wire types. The color and shape the editor draws live on the Rust type, so
 // the socket type system and Rust's are the same system.
 //
-// Colour is derived from the type name unless you say otherwise, so a socket
+// Color is derived from the type name unless you say otherwise, so a socket
 // type needs no attribute at all. Shape is semantic, so it stays explicit.
 //
 // A type that names a `widget` can also be typed in by hand when the socket is
@@ -125,7 +125,7 @@ struct EnvFile {
 /// The other end of the range: everything spelled out. `category` groups the
 /// add-node menu and tints the header, which is worth doing once a library has
 /// enough kinds to need sorting — `nodez-demo` has fourteen and five categories.
-/// Its header colour is derived from "Runtime"; the others, having no category,
+/// Its header color is derived from "Runtime"; the others, having no category,
 /// are derived from their own ids. `header_color` overrides that when needed.
 #[derive(Debug, NodeType)]
 #[node(

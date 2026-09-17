@@ -14,9 +14,9 @@ use crate::value::Value;
 /// Which way to walk.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Direction {
-    /// Towards the inputs: the nodes this one depends on.
+    /// Toward the inputs: the nodes this one depends on.
     Upstream,
-    /// Towards the outputs: the nodes that depend on this one.
+    /// Toward the outputs: the nodes that depend on this one.
     Downstream,
 }
 
@@ -173,7 +173,7 @@ impl<N: NodeData> Graph<N> {
         dedup(self.outgoing(node).map(|c| c.to.node))
     }
 
-    /// Immediate neighbours in the given direction.
+    /// Immediate neighbors in the given direction.
     pub fn neighbors(&self, node: NodeId, direction: Direction) -> Vec<NodeId> {
         match direction {
             Direction::Upstream => self.predecessors(node),

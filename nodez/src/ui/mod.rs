@@ -195,7 +195,7 @@ impl EditorState {
         self.renaming = None;
     }
 
-    /// Centre the view on a graph-space point.
+    /// Center the view on a graph-space point.
     pub fn center_on(&mut self, screen: Rect, point: Pos2) {
         self.pan = screen.size() * 0.5 / self.zoom - point.to_vec2();
     }
@@ -995,11 +995,11 @@ impl NodeEditor {
         font: &FontId,
         show_label: bool,
     ) -> Rect {
-        let self_labelling = matches!(
+        let self_labeling = matches!(
             widget,
             Widget::Checkbox | Widget::Text { .. } | Widget::Vec2 { .. } | Widget::Vec3 { .. }
         );
-        if !show_label || self_labelling {
+        if !show_label || self_labeling {
             return row;
         }
         let label_width = (row.width() * 0.45).min(90.0);
@@ -1631,7 +1631,7 @@ impl NodeEditor {
                 link,
             } => {
                 let id = graph.add_node(library, template, position);
-                // Centre the new node on the click, like Blender's add menu,
+                // Center the new node on the click, like Blender's add menu,
                 // then step it clear of anything already there.
                 if let Some(node) = graph.node_mut(id) {
                     let offset = vec2(node.width * 0.5, 0.0);

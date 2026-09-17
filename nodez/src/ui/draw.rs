@@ -83,7 +83,7 @@ pub(crate) fn paint_grid(painter: &Painter, viewport: &Viewport, style: &EditorS
     }
 }
 
-/// Paint one noodle, fading from the source socket's colour to the target's.
+/// Paint one noodle, fading from the source socket's color to the target's.
 #[allow(clippy::too_many_arguments)] // a painting helper; each argument is a distinct visual input
 pub(crate) fn paint_wire(
     painter: &Painter,

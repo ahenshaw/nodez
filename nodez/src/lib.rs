@@ -11,10 +11,10 @@
 //!   turns that graph into whatever you need. None of it depends on the editor
 //!   running, so the same graph can be loaded and rendered headlessly.
 //! * **The editor** — [`NodeEditor`] draws the graph the way Blender's node
-//!   editor does: colour-coded sockets, bezier noodles that fade between the two
-//!   socket colours, box select, `Shift+A` to add, `G` to grab, `X` to delete.
+//!   editor does: color-coded sockets, bezier noodles that fade between the two
+//!   socket colors, box select, `Shift+A` to add, `G` to grab, `X` to delete.
 //!
-//! Sockets are typed. A [`TypeRegistry`] assigns each type a colour and a
+//! Sockets are typed. A [`TypeRegistry`] assigns each type a color and a
 //! shape, and [`TypeRegistry::allow_cast`] declares which types may implicitly
 //! feed which others. The editor refuses incompatible drags, and
 //! [`Graph::connect`] refuses them in code too, so a graph on disk is always

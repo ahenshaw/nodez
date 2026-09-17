@@ -1,6 +1,6 @@
 //! **Prototype.** Derive macros for `nodez`.
 //!
-//! `#[derive(SocketType)]` turns a Rust type into a wire type: a name, a colour,
+//! `#[derive(SocketType)]` turns a Rust type into a wire type: a name, a color,
 //! a shape, and optionally an inline editor. `#[derive(NodeType)]` turns a
 //! struct into a kind of node: the field types give the sockets, their arity and
 //! their widgets, and the generated reader resolves each field from its link or
@@ -72,7 +72,7 @@ fn socket_type_impl(input: &DeriveInput) -> syn::Result<TokenStream2> {
         .name
         .map(|n| n.value())
         .unwrap_or_else(|| ident.to_string());
-    // A type that says nothing about colour gets one derived from its name,
+    // A type that says nothing about color gets one derived from its name,
     // which is stable and usually good enough to tell sockets apart.
     let color = match attrs.color.as_ref() {
         Some(lit) => {
@@ -689,7 +689,7 @@ fn parse_hex(lit: &LitStr) -> syn::Result<(u8, u8, u8)> {
     if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(syn::Error::new_spanned(
             lit,
-            format!("`{text}` is not a #RRGGBB colour"),
+            format!("`{text}` is not a #RRGGBB color"),
         ));
     }
     let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).expect("checked above");

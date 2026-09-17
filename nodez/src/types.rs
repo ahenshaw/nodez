@@ -1,4 +1,4 @@
-//! Socket data types: their colours, their shapes, and the rules deciding which
+//! Socket data types: their colors, their shapes, and the rules deciding which
 //! of them may be wired together.
 
 use std::collections::HashMap;
@@ -37,7 +37,7 @@ pub struct DataType {
     /// Stable identifier, also used as the display name unless `label` is set.
     pub name: String,
     pub label: String,
-    /// The colour of sockets and of the wires leaving them.
+    /// The color of sockets and of the wires leaving them.
     pub color: Color32,
     pub shape: SocketShape,
     /// A wildcard type connects to everything. Useful for reroute / group nodes.
@@ -104,17 +104,17 @@ impl DataTypeBuilder {
     }
 }
 
-/// Pick a stable colour for a socket type from its name.
+/// Pick a stable color for a socket type from its name.
 ///
 /// The hue comes from a hash of the name, while saturation and lightness are
 /// fixed, so a palette generated this way reads as one family and a type keeps
-/// its colour for the life of the project. Two names can land on neighbouring
-/// hues; give one of them an explicit colour if that ever matters.
+/// its color for the life of the project. Two names can land on neighboring
+/// hues; give one of them an explicit color if that ever matters.
 pub fn auto_color(name: &str) -> Color32 {
     hsl(hash_name(name) % 360, 0.62, 0.62)
 }
 
-/// Pick a stable node-header colour from a name.
+/// Pick a stable node-header color from a name.
 ///
 /// The same hue [`auto_color`] would give, but muted: a header is a large fill
 /// behind light text, so it wants roughly the saturation and lightness a
