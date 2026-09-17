@@ -213,44 +213,34 @@ impl Evaluate<Config> for Service {
             return Err(NodeError::custom("Service needs a name."));
         }
 
-        let mut body = vec![("image".to_owned(), Value::Text(self.image.0.clone()))];
-
-        if self.restart != Restart::No {
-            body.push(("restart".to_owned(), self.restart.to_value()));
-        }
-        if self.replicas > 1 {
-            body.push((
-                "deploy".to_owned(),
-                Value::Map(vec![("replicas".to_owned(), Value::Int(self.replicas))]),
-            ));
-        }
-        if !self.ports.is_empty() {
-            let ports = self.ports.iter().map(|p| Value::Text(p.0.clone())).collect();
-            body.push(("ports".to_owned(), Value::List(ports)));
-        }
-
-        // `Multi<EnvList>` is a fan-in of lists: flatten across links.
-        let environment: Vec<Value> = self
-            .environment
-            .iter()
-            .flat_map(|list| list.0.iter().cloned().map(Value::Text))
-            .collect();
-        if !environment.is_empty() {
-            body.push(("environment".to_owned(), Value::List(environment)));
-        }
-
-        if let Some(health) = &self.healthcheck {
-            let entries = health
-                .0
-                .iter()
-                .map(|(k, v)| (k.clone(), Value::Text(v.clone())))
-                .collect();
-            body.push(("healthcheck".to_owned(), Value::Map(entries)));
-        }
+        let body = Value::map()
+            .set("image", self.image.0.clone())
+            .set_if(self.restart != Restart::No, "restart", self.restart.to_value())
+            .set_if(
+                self.replicas > 1,
+                "deploy",
+                Value::map().set("replicas", self.replicas),
+            )
+            .set_list("ports", self.ports.iter().map(|p| p.0.clone()))
+            // `Multi<EnvList>` is a fan-in of lists: flatten across links.
+            .set_list(
+                "environment",
+                self.environment.iter().flat_map(|list| list.0.iter().cloned()),
+            )
+            .set_some(
+                "healthcheck",
+                self.healthcheck.as_ref().map(|health| {
+                    health
+                        .0
+                        .iter()
+                        .map(|(k, v)| (k.clone(), Value::Text(v.clone())))
+                        .collect::<nodez::MapBuilder>()
+                }),
+            );
 
         Ok(ServiceDef {
             name: name.to_owned(),
-            body,
+            body: body.entries(),
         })
     }
 }

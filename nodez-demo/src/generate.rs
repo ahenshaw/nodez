@@ -258,101 +258,75 @@ fn build_service(ctx: &EvalContext<'_, Fragment>) -> Result<Fragment, String> {
         return Err(format!("Service `{name}` has no image connected."));
     };
 
-    let mut body = vec![("image".to_owned(), Value::Text(image))];
-
-    let command = resolve_text(ctx, "command");
-    if !command.is_empty() {
-        body.push(("command".to_owned(), Value::Text(command)));
-    }
-
-    if let Some(restart) = ctx.param_str("restart").filter(|r| r != "no") {
-        body.push(("restart".to_owned(), Value::Text(restart)));
-    }
-
-    let replicas = resolve_number(ctx, "replicas", 1.0) as i64;
-    if replicas > 1 {
-        body.push((
-            "deploy".to_owned(),
-            Value::Map(vec![("replicas".to_owned(), Value::Int(replicas))]),
-        ));
-    }
-
-    let ports: Vec<Value> = ctx
-        .inputs("ports")
-        .iter()
-        .filter_map(|link| match link.value {
-            Fragment::Port(mapping) => Some(Value::Text(mapping.clone())),
-            _ => None,
-        })
-        .collect();
-    if !ports.is_empty() {
-        body.push(("ports".to_owned(), Value::List(ports)));
-    }
-
+    // Env is the one socket type carrying two shapes: inline entries from a
+    // variable, or a path from a file.
     let mut environment = Vec::new();
     let mut env_files = Vec::new();
     for link in ctx.inputs("environment") {
         match link.value {
-            Fragment::Env(entries) => {
-                environment.extend(entries.iter().cloned().map(Value::Text));
-            }
-            Fragment::EnvFile(path) if !path.is_empty() => {
-                env_files.push(Value::Text(path.clone()));
-            }
+            Fragment::Env(entries) => environment.extend(entries.iter().cloned()),
+            Fragment::EnvFile(path) if !path.is_empty() => env_files.push(path.clone()),
             _ => {}
         }
     }
-    if !environment.is_empty() {
-        body.push(("environment".to_owned(), Value::List(environment)));
-    }
-    if !env_files.is_empty() {
-        body.push(("env_file".to_owned(), Value::List(env_files)));
-    }
 
-    let volumes: Vec<Value> = ctx
-        .inputs("volumes")
-        .iter()
-        .filter_map(|link| match link.value {
+    let replicas = resolve_number(ctx, "replicas", 1.0) as i64;
+    let command = resolve_text(ctx, "command");
+
+    let body = Value::map()
+        .set("image", image)
+        .set_if(!command.is_empty(), "command", command)
+        .set_some(
+            "restart",
+            ctx.param_str("restart").filter(|restart| restart != "no"),
+        )
+        .set_if(
+            replicas > 1,
+            "deploy",
+            Value::map().set("replicas", replicas),
+        )
+        .set_list("ports", collect(ctx, "ports", |fragment| match fragment {
+            Fragment::Port(mapping) => Some(Value::Text(mapping.clone())),
+            _ => None,
+        }))
+        .set_list("environment", environment)
+        .set_list("env_file", env_files)
+        .set_list("volumes", collect(ctx, "volumes", |fragment| match fragment {
             Fragment::Mount(entry) => Some(entry.clone()),
             _ => None,
-        })
-        .collect();
-    if !volumes.is_empty() {
-        body.push(("volumes".to_owned(), Value::List(volumes)));
-    }
-
-    let networks: Vec<Value> = ctx
-        .inputs("networks")
-        .iter()
-        .filter_map(|link| match link.value {
+        }))
+        .set_list("networks", collect(ctx, "networks", |fragment| match fragment {
             Fragment::Network { name, .. } => Some(Value::Text(name.clone())),
             _ => None,
-        })
-        .collect();
-    if !networks.is_empty() {
-        body.push(("networks".to_owned(), Value::List(networks)));
-    }
-
-    let depends: Vec<Value> = ctx
-        .inputs("depends_on")
-        .iter()
-        .filter_map(|link| match link.value {
+        }))
+        .set_list("depends_on", collect(ctx, "depends_on", |fragment| match fragment {
             Fragment::Service { name, .. } => Some(Value::Text(name.clone())),
             _ => None,
-        })
-        .collect();
-    if !depends.is_empty() {
-        body.push(("depends_on".to_owned(), Value::List(depends)));
-    }
-
-    if let Some(Fragment::Health(probe)) = ctx.input("healthcheck").map(|link| link.value) {
-        body.push(("healthcheck".to_owned(), probe.clone()));
-    }
+        }))
+        .set_some(
+            "healthcheck",
+            match ctx.input("healthcheck").map(|link| link.value) {
+                Some(Fragment::Health(probe)) => Some(probe.clone()),
+                _ => None,
+            },
+        );
 
     Ok(Fragment::Service {
         name,
-        body: Value::Map(body),
+        body: body.into(),
     })
+}
+
+/// Every fragment arriving at a multi-input that matches a shape.
+fn collect(
+    ctx: &EvalContext<'_, Fragment>,
+    socket: &str,
+    mut pick: impl FnMut(&Fragment) -> Option<Value>,
+) -> Vec<Value> {
+    ctx.inputs(socket)
+        .iter()
+        .filter_map(|link| pick(link.value))
+        .collect()
 }
 
 fn build_stack(ctx: &EvalContext<'_, Fragment>) -> Result<Fragment, String> {

@@ -83,6 +83,18 @@ Iterators and folds for walking the graph, all on `Graph`:
 | `input_source()`, `source_of()`, `param()` | resolving one input |
 | `evaluate()`, `evaluate_all()`, `for_each_topological()` | folds |
 
+`Value::map()` builds the ordered maps most config formats want, skipping
+entries that would be empty — which is most of what assembling a document by
+hand costs:
+
+```rust
+let body = Value::map()
+    .set("image", image)
+    .set_if(replicas > 1, "deploy", Value::map().set("replicas", replicas))
+    .set_list("ports", ports)          // key dropped when the list is empty
+    .set_some("healthcheck", probe);   // key dropped when there is no probe
+```
+
 `evaluate` is the one that turns a graph into a config file. It calls your
 closure once per node, in dependency order, handing it the results of everything
 upstream:

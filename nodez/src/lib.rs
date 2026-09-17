@@ -131,4 +131,4 @@ pub use types::{
 pub use ui::{
     EditorAction, EditorResponse, EditorState, EditorStyle, NodeEditor, ScrollMode, node_size,
 };
-pub use value::{Value, ValueKind};
+pub use value::{MapBuilder, Value, ValueKind};

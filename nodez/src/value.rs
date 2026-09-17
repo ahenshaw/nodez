@@ -204,6 +204,107 @@ impl Value {
     }
 }
 
+impl Value {
+    /// Start building an ordered map.
+    ///
+    /// Config files care about key order, so entries come out in the order they
+    /// were set. The `set_*` variants drop an entry that would be empty, which
+    /// is most of what assembling a document by hand spends its lines on:
+    ///
+    /// ```
+    /// # use nodez::Value;
+    /// # let (restart, replicas, ports) = ("always", 3_i64, vec!["8080:80"]);
+    /// let service = Value::map()
+    ///     .set("image", "nginx:latest")
+    ///     .set_if(restart != "no", "restart", restart)
+    ///     .set_if(replicas > 1, "deploy", Value::map().set("replicas", replicas))
+    ///     .set_list("ports", ports)
+    ///     .set_some::<String>("command", None);
+    /// # let _ = Value::from(service);
+    /// ```
+    pub fn map() -> MapBuilder {
+        MapBuilder::new()
+    }
+}
+
+/// Builds an ordered [`Value::Map`].
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MapBuilder(Vec<(String, Value)>);
+
+impl MapBuilder {
+    pub fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    /// Set a key, whatever its value.
+    #[must_use]
+    pub fn set(mut self, key: impl Into<String>, value: impl Into<Value>) -> Self {
+        self.0.push((key.into(), value.into()));
+        self
+    }
+
+    /// Set a key only when `keep` holds.
+    #[must_use]
+    pub fn set_if(self, keep: bool, key: impl Into<String>, value: impl Into<Value>) -> Self {
+        if keep { self.set(key, value) } else { self }
+    }
+
+    /// Set a key only when there is a value for it.
+    #[must_use]
+    pub fn set_some<T: Into<Value>>(self, key: impl Into<String>, value: Option<T>) -> Self {
+        match value {
+            Some(value) => self.set(key, value),
+            None => self,
+        }
+    }
+
+    /// Set a key to a list, dropping the key when the list is empty.
+    #[must_use]
+    pub fn set_list<T: Into<Value>>(
+        self,
+        key: impl Into<String>,
+        items: impl IntoIterator<Item = T>,
+    ) -> Self {
+        let items: Vec<Value> = items.into_iter().map(Into::into).collect();
+        if items.is_empty() {
+            self
+        } else {
+            self.set(key, Value::List(items))
+        }
+    }
+
+    /// Set a key to a nested map, dropping the key when that map is empty.
+    #[must_use]
+    pub fn set_map(self, key: impl Into<String>, map: MapBuilder) -> Self {
+        if map.is_empty() { self } else { self.set(key, map) }
+    }
+
+    /// The entries, in the order they were set.
+    pub fn entries(self) -> Vec<(String, Value)> {
+        self.0
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+impl From<MapBuilder> for Value {
+    fn from(builder: MapBuilder) -> Self {
+        Self::Map(builder.0)
+    }
+}
+
+impl FromIterator<(String, Value)> for MapBuilder {
+    fn from_iter<I: IntoIterator<Item = (String, Value)>>(iter: I) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
+
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.to_literal())
