@@ -9,6 +9,9 @@ use egui::Color32;
 use crate::types::{DataTypeId, TypeRegistry};
 use crate::value::Value;
 
+/// The category a template lands in when it names none.
+pub const DEFAULT_CATEGORY: &str = "Misc";
+
 /// Handle to a template registered in a [`NodeLibrary`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -316,7 +319,7 @@ impl NodeTemplate {
         Self {
             id: id.into(),
             label: label.into(),
-            category: "Misc".to_owned(),
+            category: DEFAULT_CATEGORY.to_owned(),
             header_color: None,
             inputs: Vec::new(),
             outputs: Vec::new(),
@@ -390,6 +393,17 @@ impl NodeTemplate {
     pub fn param_spec(&self, name: &str) -> Option<&ParamSpec> {
         self.params.iter().find(|p| p.name == name)
     }
+
+    /// What a derived header colour is keyed on: the category, so that a
+    /// category reads as one family, or the template's own id when it has no
+    /// category to belong to.
+    pub fn color_key(&self) -> &str {
+        if self.category == DEFAULT_CATEGORY {
+            &self.id
+        } else {
+            &self.category
+        }
+    }
 }
 
 /// The catalogue of node templates and the types their sockets speak.
@@ -442,6 +456,18 @@ impl NodeLibrary {
 
     pub fn category_color(&self, category: &str) -> Option<Color32> {
         self.category_colors.get(category).copied()
+    }
+
+    /// The colour a template's header is drawn in.
+    ///
+    /// Its own colour if it names one, else its category's if that names one,
+    /// else one derived from [`NodeTemplate::color_key`] — so a library needs
+    /// no colour choices at all to come out looking deliberate.
+    pub fn header_color(&self, template: &NodeTemplate) -> Color32 {
+        template
+            .header_color
+            .or_else(|| self.category_color(&template.category))
+            .unwrap_or_else(|| crate::types::auto_header_color(template.color_key()))
     }
 
     /// Categories in registration order.

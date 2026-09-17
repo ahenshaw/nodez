@@ -111,13 +111,26 @@ impl DataTypeBuilder {
 /// its colour for the life of the project. Two names can land on neighbouring
 /// hues; give one of them an explicit colour if that ever matters.
 pub fn auto_color(name: &str) -> Color32 {
-    // FNV-1a: small, stable, and good enough to scatter short names.
+    hsl(hash_name(name) % 360, 0.62, 0.62)
+}
+
+/// Pick a stable node-header colour from a name.
+///
+/// The same hue [`auto_color`] would give, but muted: a header is a large fill
+/// behind light text, so it wants roughly the saturation and lightness a
+/// hand-picked palette lands on rather than the vividness of a socket dot.
+pub fn auto_header_color(name: &str) -> Color32 {
+    hsl(hash_name(name) % 360, 0.33, 0.32)
+}
+
+/// FNV-1a: small, stable, and good enough to scatter short names.
+fn hash_name(name: &str) -> u32 {
     let mut hash: u32 = 0x811c_9dc5;
     for byte in name.as_bytes() {
         hash ^= u32::from(*byte);
         hash = hash.wrapping_mul(0x0100_0193);
     }
-    hsl(hash % 360, 0.62, 0.62)
+    hash
 }
 
 fn hsl(hue_degrees: u32, saturation: f32, lightness: f32) -> Color32 {

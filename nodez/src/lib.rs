@@ -114,12 +114,15 @@ pub use graph::{
     Repairs, SocketKind, SocketRef,
 };
 pub use layout::{LayoutOptions, layered};
-pub use template::{NodeLibrary, NodeTemplate, ParamSpec, SocketSpec, TemplateId, Widget};
+pub use template::{
+    DEFAULT_CATEGORY, NodeLibrary, NodeTemplate, ParamSpec, SocketSpec, TemplateId, Widget,
+};
 pub use traversal::{
     Direction, EvalContext, EvalError, InputSource, Linked, Topological, Walk,
 };
 pub use types::{
     DataType, DataTypeBuilder, DataTypeId, SocketShape, TypeRegistry, auto_color,
+    auto_header_color,
 };
 pub use ui::{
     EditorAction, EditorResponse, EditorState, EditorStyle, NodeEditor, ScrollMode, node_size,

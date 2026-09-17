@@ -221,10 +221,7 @@ fn entry(
     highlighted: bool,
     show_category: bool,
 ) -> bool {
-    let color = template
-        .header_color
-        .or_else(|| library.category_color(&template.category))
-        .unwrap_or(Color32::GRAY);
+    let color = library.header_color(template);
 
     let width = ui.available_width();
     let (rect, response) =

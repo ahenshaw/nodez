@@ -125,11 +125,11 @@ struct EnvFile {
 /// The other end of the range: everything spelled out. `category` groups the
 /// add-node menu and tints the header, which is worth doing once a library has
 /// enough kinds to need sorting — `nodez-demo` has fourteen and five categories.
-/// `header_color` overrides that tint for one kind.
+/// Its header colour is derived from "Runtime"; the others, having no category,
+/// are derived from their own ids. `header_color` overrides that when needed.
 #[derive(Debug, NodeType)]
 #[node(
     category = "Runtime",
-    header_color = "#7A4A2E",
     description = "One service in the stack.",
     output = ServiceDef
 )]

@@ -608,10 +608,7 @@ impl NodeEditor {
         let Some(template) = library.get(template_id) else {
             return false;
         };
-        let header_color = template
-            .header_color
-            .or_else(|| library.category_color(&template.category))
-            .unwrap_or(self.style.header_fill);
+        let header_color = library.header_color(template);
 
         let node_id = base_id.with(("node", geom.id));
         let response = ui.interact(geom.rect, node_id, Sense::click_and_drag());
