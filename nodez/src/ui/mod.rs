@@ -10,7 +10,9 @@ mod menu;
 mod style;
 mod widgets;
 
-pub use geometry::{NodeGeometry, RowGeometry, RowKind, SocketGeometry, Viewport, node_size};
+pub use geometry::{
+    NodeGeometry, RowGeometry, RowKind, SocketGeometry, Viewport, free_position, node_size,
+};
 pub use style::EditorStyle;
 
 use std::collections::HashSet;
@@ -251,6 +253,20 @@ impl NodeEditor {
             style,
             ..Self::default()
         }
+    }
+
+    /// The middle of what the editor is currently showing, in graph space.
+    ///
+    /// Useful for placing a node the user asked for from outside the canvas,
+    /// where there is no cursor position to use.
+    pub fn view_center(&self) -> egui::Pos2 {
+        Viewport {
+            screen: self.last_screen,
+            pan: self.state.pan,
+            zoom: self.state.zoom,
+        }
+        .visible_graph_rect()
+        .center()
     }
 
     /// Frame the whole graph in the view.
@@ -1554,10 +1570,30 @@ impl NodeEditor {
                 link,
             } => {
                 let id = graph.add_node(library, template, position);
-                // Centre the new node on the click, like Blender's add menu.
+                // Centre the new node on the click, like Blender's add menu,
+                // then step it clear of anything already there.
                 if let Some(node) = graph.node_mut(id) {
                     let offset = vec2(node.width * 0.5, 0.0);
                     node.position -= offset;
+                }
+                let placed = graph.node(id).map(|node| {
+                    (
+                        node.position,
+                        geometry::node_size(graph, library, node, &self.style),
+                    )
+                });
+                if let Some((preferred, size)) = placed {
+                    let free = geometry::free_position(
+                        graph,
+                        library,
+                        &self.style,
+                        size,
+                        preferred,
+                        Some(id),
+                    );
+                    if let Some(node) = graph.node_mut(id) {
+                        node.position = free;
+                    }
                 }
                 actions.push(EditorAction::NodeAdded(id));
                 self.state.select_only(id);

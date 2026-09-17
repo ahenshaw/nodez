@@ -26,7 +26,7 @@ use egui::{Color32, RichText};
 
 use crate::graph::{DynNode, Graph, NodeData, NodeId};
 use crate::template::{NodeLibrary, TemplateId};
-use crate::ui::{EditorAction, EditorStyle, NodeEditor, ScrollMode, node_size};
+use crate::ui::{EditorAction, EditorStyle, NodeEditor, ScrollMode, free_position, node_size};
 
 /// What a preview callback produces: the generated text, and anything wrong
 /// with the graph that produced it.
@@ -267,12 +267,30 @@ impl<N: NodeData> EditorApp<N> {
         });
 
         // Adding from the palette needs the graph, which the panel borrowed.
+        // There is no cursor to place it under, so it goes in the first open
+        // space near the middle of the view rather than always the same spot.
         if let Some(template) = self.pending_add.take() {
-            let centre = egui::pos2(
-                -self.editor.state.pan.x + 200.0,
-                -self.editor.state.pan.y + 150.0,
-            );
-            let id = self.graph.add_node(&self.library, template, centre);
+            let id = self
+                .graph
+                .add_node(&self.library, template, self.editor.view_center());
+            if let Some((preferred, size)) = self.graph.node(id).map(|node| {
+                (
+                    node.position,
+                    node_size(&self.graph, &self.library, node, &self.editor.style),
+                )
+            }) {
+                let free = free_position(
+                    &self.graph,
+                    &self.library,
+                    &self.editor.style,
+                    size,
+                    preferred - size / 2.0,
+                    Some(id),
+                );
+                if let Some(node) = self.graph.node_mut(id) {
+                    node.position = free;
+                }
+            }
             self.editor.state.select_only(id);
             self.regenerate();
             self.status.info("Added a node.");

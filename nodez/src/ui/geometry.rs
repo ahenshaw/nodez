@@ -376,6 +376,62 @@ fn collapsed_geometry<N: NodeData>(
     }
 }
 
+/// Find a spot near `preferred` where a node of `size` will not sit on top of
+/// anything already placed.
+///
+/// Candidates step outwards a node at a time, below first, so a run of nodes
+/// added from the same place fills the space around it instead of stacking.
+/// `ignore` is skipped when testing, for repositioning a node that is already
+/// in the graph.
+pub fn free_position<N: NodeData>(
+    graph: &Graph<N>,
+    library: &NodeLibrary,
+    style: &EditorStyle,
+    size: Vec2,
+    preferred: Pos2,
+    ignore: Option<NodeId>,
+) -> Pos2 {
+    let gap = style.row_height;
+    let occupied: Vec<Rect> = graph
+        .nodes()
+        .filter(|node| Some(node.id) != ignore)
+        .map(|node| {
+            Rect::from_min_size(node.position, node_size(graph, library, node, style))
+                .expand(gap * 0.5)
+        })
+        .collect();
+
+    let is_free = |at: Pos2| {
+        let rect = Rect::from_min_size(at, size);
+        !occupied.iter().any(|other| other.intersects(rect))
+    };
+    if is_free(preferred) {
+        return preferred;
+    }
+
+    let step = size + Vec2::splat(gap);
+    for ring in 1..=24 {
+        let r = ring as f32;
+        // Below, then the diagonals and sides, so a column fills first.
+        for (dx, dy) in [
+            (0.0, r),
+            (r, r),
+            (r, 0.0),
+            (r, -r),
+            (0.0, -r),
+            (-r, -r),
+            (-r, 0.0),
+            (-r, r),
+        ] {
+            let candidate = preferred + vec2(dx * step.x, dy * step.y);
+            if is_free(candidate) {
+                return candidate;
+            }
+        }
+    }
+    preferred
+}
+
 /// Control points for the wire between two sockets.
 ///
 /// Wires leave outputs to the right and enter inputs from the left, so a
