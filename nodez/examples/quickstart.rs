@@ -52,31 +52,32 @@ struct Collect {
     urls: Multi<Url>,
 }
 
-// 3. What each kind does. `Fold` names one way of walking the graph; you can
-//    add others later without touching the nodes above.
-struct Build;
-impl Fold for Build {}
+// 3. What each kind does. `Fold` names one way of walking the graph — named
+//    after what it produces, like a category is named after what it groups.
+//    The two are unrelated; you can add more folds without touching the nodes.
+struct Urls;
+impl Fold for Urls {}
 
-impl Evaluate<Build> for Text {
+impl Evaluate<Urls> for Text {
     fn evaluate(&self) -> Result<String, NodeError> {
         Ok(self.value.clone())
     }
 }
 
-impl Evaluate<Build> for Join {
+impl Evaluate<Urls> for Join {
     fn evaluate(&self) -> Result<String, NodeError> {
         Ok(self.parts.iter().cloned().collect::<Vec<_>>().join(&self.separator))
     }
 }
 
-impl Evaluate<Build> for Address {
+impl Evaluate<Urls> for Address {
     fn evaluate(&self) -> Result<Url, NodeError> {
         let scheme = if self.port == 443 { "https" } else { "http" };
         Ok(Url(format!("{scheme}://{}:{}/{}", self.host, self.port, self.path)))
     }
 }
 
-impl Evaluate<Build> for Collect {
+impl Evaluate<Urls> for Collect {
     fn evaluate(&self) -> Result<String, NodeError> {
         Ok(self.urls.iter().map(|u| u.0.as_str()).collect::<Vec<_>>().join("\n"))
     }
@@ -84,7 +85,7 @@ impl Evaluate<Build> for Collect {
 
 fn main() -> eframe::Result {
     let mut library = NodeLibrary::new();
-    let mut rules = Rules::<Build>::new();
+    let mut rules = Rules::<Urls>::new();
     rules.register_all::<(Text, Join, Address, Collect)>(&mut library);
 
     let graph = starting_graph(&library);
@@ -96,7 +97,7 @@ fn main() -> eframe::Result {
 }
 
 /// Fold the graph and show whatever the Collect node came to.
-fn run(graph: &Graph, library: &NodeLibrary, rules: &Rules<Build>) -> String {
+fn run(graph: &Graph, library: &NodeLibrary, rules: &Rules<Urls>) -> String {
     let Some(target) = graph.nodes_of_template(library.id("collect").unwrap()).next()
     else { return "add a Collect node".to_owned() };
     match graph.evaluate::<Payload, NodeError>(library, target.id, |ctx| rules.run(&ctx)) {

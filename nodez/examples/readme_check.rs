@@ -46,25 +46,26 @@ struct Collect {
     urls: Multi<Url>,              // Url has no editor, so this is link-only
 }
 
-// 3. What each kind does.
-struct Build;
-impl Fold for Build {}
+// 3. What each kind does. A `Fold` names one way of walking the graph. It is
+//    unrelated to a category, which only groups nodes in the menu.
+struct Urls;
+impl Fold for Urls {}
 
-impl Evaluate<Build> for Text {
+impl Evaluate<Urls> for Text {
     fn evaluate(&self) -> Result<String, NodeError> { Ok(self.value.clone()) }
 }
-impl Evaluate<Build> for Join {
+impl Evaluate<Urls> for Join {
     fn evaluate(&self) -> Result<String, NodeError> {
         Ok(self.parts.iter().cloned().collect::<Vec<_>>().join(&self.separator))
     }
 }
-impl Evaluate<Build> for Address {
+impl Evaluate<Urls> for Address {
     fn evaluate(&self) -> Result<Url, NodeError> {
         let scheme = if self.port == 443 { "https" } else { "http" };
         Ok(Url(format!("{scheme}://{}:{}/{}", self.host, self.port, self.path)))
     }
 }
-impl Evaluate<Build> for Collect {
+impl Evaluate<Urls> for Collect {
     fn evaluate(&self) -> Result<String, NodeError> {
         Ok(self.urls.iter().map(|u| u.0.as_str()).collect::<Vec<_>>().join("\n"))
     }
@@ -73,7 +74,7 @@ impl Evaluate<Build> for Collect {
 // 4. A window.
 fn main() -> eframe::Result {
     let mut library = NodeLibrary::new();
-    let mut rules = Rules::<Build>::new();
+    let mut rules = Rules::<Urls>::new();
     rules.register_all::<(Text, Join, Address, Collect)>(&mut library);
 
     EditorApp::new(library)
@@ -82,7 +83,7 @@ fn main() -> eframe::Result {
         .run()
 }
 
-fn run(graph: &Graph, library: &NodeLibrary, rules: &Rules<Build>) -> String {
+fn run(graph: &Graph, library: &NodeLibrary, rules: &Rules<Urls>) -> String {
     let Some(target) = graph.nodes_of_template(library.id("collect").unwrap()).next()
     else { return "add a Collect node".to_owned() };
     match graph.evaluate::<Payload, NodeError>(library, target.id, |ctx| rules.run(&ctx)) {
