@@ -122,7 +122,7 @@ cargo run -p nodez --features derive,app --example quickstart
 | you write | you get |
 |---|---|
 | `#[input] x: T` | a socket that must be wired |
-| `#[input] x: Option<T>` | a socket that may be wired |
+| `#[input] x: Option<T>` | a link-only socket that may be wired |
 | `#[input] x: Multi<T>` | a socket accepting any number of links, in order |
 | `x: T` (no attribute) | a parameter, drawn in the body, never wired |
 
@@ -134,6 +134,11 @@ when it was made.
 A wire type that offers an inline editor — `String`, `i64`, `f64`, `bool`, or
 anything with `#[socket(widget = …)]` — makes a socket you can also type into.
 One that doesn't is link-only.
+
+That is why `Option` only says something on a link-only socket. An editable one
+always has a value, whether or not anything is wired to it, so an
+`Option<String>` would never be `None`; a debug assertion says so when a
+template is built.
 
 `#[input]` takes `default`, `label`, `hint`, `description`, `min` and `max`.
 `#[node]` takes `id`, `label`, `category`, `description`, `keywords`, `width`,

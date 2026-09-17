@@ -183,10 +183,10 @@ fn evaluation_folds_in_dependency_order() {
     let rendered = graph
         .evaluate::<String, std::convert::Infallible>(&f.library, join, |ctx| {
             Ok(match ctx.template().id.as_str() {
-                "text" => ctx.literal_str("value").unwrap_or_default().to_owned(),
+                "text" => ctx.literal_str("value").unwrap_or_default().into_owned(),
                 "number" => ctx.literal_f64("value").unwrap_or_default().to_string(),
                 "join" => {
-                    let separator = ctx.param_str("separator").unwrap_or_else(|| " ".to_owned());
+                    let separator = ctx.param_str("separator").unwrap_or(" ".into());
                     let parts: Vec<&str> =
                         ctx.inputs("parts").iter().map(|l| l.value.as_str()).collect();
                     parts.join(&separator)
@@ -260,8 +260,8 @@ fn input_values_default_from_the_template() {
     let mut graph = Graph::new();
     let node = graph.add_node(&f.library, f.join, pos2(0.0, 0.0));
     assert_eq!(
-        graph.node(node).unwrap().param("separator"),
-        Some(Value::Text(" ".to_owned()))
+        graph.node(node).unwrap().param("separator").as_deref(),
+        Some(&Value::Text(" ".to_owned()))
     );
 }
 
@@ -322,8 +322,8 @@ fn graphs_round_trip_through_json() {
     assert_eq!(restored.node_count(), 2);
     assert_eq!(restored.connection_count(), 1);
     assert_eq!(
-        restored.node(a).unwrap().input_value("value"),
-        Some(Value::Text("round trip".to_owned()))
+        restored.node(a).unwrap().input_value("value").as_deref(),
+        Some(&Value::Text("round trip".to_owned()))
     );
 
     // Ids must not be handed out again after a load.

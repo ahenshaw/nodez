@@ -55,7 +55,7 @@
 //! let out = graph
 //!     .evaluate::<String, std::convert::Infallible>(&library, b, |ctx| {
 //!         Ok(match ctx.template().id.as_str() {
-//!             "text" => ctx.literal_str("value").unwrap_or_default().to_owned(),
+//!             "text" => ctx.literal_str("value").unwrap_or_default().into_owned(),
 //!             "upper" => ctx.input("text").map(|l| l.value.to_uppercase()).unwrap_or_default(),
 //!             _ => String::new(),
 //!         })

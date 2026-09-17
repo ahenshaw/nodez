@@ -4,6 +4,7 @@
 //! module needs the editor to be running. This is the half of the crate you use
 //! to turn a graph into a config file.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::graph::{Connection, CycleError, DynNode, Graph, Node, NodeData, NodeId, SocketRef};
@@ -32,7 +33,7 @@ impl Direction {
 #[derive(Clone, Debug)]
 pub enum InputSource<'a> {
     /// Nothing is wired in; this is the socket's inline value.
-    Literal(Value),
+    Literal(Cow<'a, Value>),
     /// One or more wires feed this socket, in connection order.
     Linked(Vec<&'a Connection>),
     /// Nothing is wired in and the socket has no inline value.
@@ -136,22 +137,27 @@ impl<N: NodeData> Graph<N> {
         match library
             .get(node.template)
             .and_then(|t| t.input_spec(socket))
-            .map(|s| s.default.clone())
+            .map(|s| &s.default)
         {
-            Some(default) if !default.is_null() => InputSource::Literal(default),
+            Some(default) if !default.is_null() => InputSource::Literal(Cow::Borrowed(default)),
             _ => InputSource::Unset,
         }
     }
 
     /// The effective value of a node parameter, falling back to the template
     /// default when the node has no stored value.
-    pub fn param(&self, library: &NodeLibrary, node: NodeId, name: &str) -> Option<Value> {
+    pub fn param<'a>(
+        &'a self,
+        library: &'a NodeLibrary,
+        node: NodeId,
+        name: &str,
+    ) -> Option<Cow<'a, Value>> {
         let node = self.node(node)?;
         node.param(name).or_else(|| {
             library
                 .get(node.template)
                 .and_then(|t| t.param_spec(name))
-                .map(|p| p.default.clone())
+                .map(|p| Cow::Borrowed(&p.default))
         })
     }
 
@@ -615,18 +621,18 @@ impl<'a, T, N: NodeData> EvalContext<'a, T, N> {
     // ------------------------------------------------------------- values
 
     /// The inline value of an input socket, whether or not it is wired.
-    pub fn literal(&self, socket: &str) -> Option<Value> {
+    pub fn literal(&self, socket: &str) -> Option<Cow<'a, Value>> {
         self.node.input_value(socket).or_else(|| {
             self.template
                 .input_spec(socket)
-                .map(|s| s.default.clone())
+                .map(|s| Cow::Borrowed(&s.default))
                 .filter(|v| !v.is_null())
         })
     }
 
     /// The inline value of an input socket, but only while it is unwired —
     /// mirroring what the editor shows.
-    pub fn unlinked_literal(&self, socket: &str) -> Option<Value> {
+    pub fn unlinked_literal(&self, socket: &str) -> Option<Cow<'a, Value>> {
         if self.is_linked(socket) {
             None
         } else {
@@ -634,48 +640,47 @@ impl<'a, T, N: NodeData> EvalContext<'a, T, N> {
         }
     }
 
-    pub fn literal_str(&self, socket: &str) -> Option<String> {
-        self.literal(socket)
-            .and_then(|v| v.as_str().map(str::to_owned))
+    pub fn literal_str(&self, socket: &str) -> Option<Cow<'a, str>> {
+        borrowed_str(self.literal(socket)?)
     }
 
     pub fn literal_f64(&self, socket: &str) -> Option<f64> {
-        self.literal(socket).as_ref().and_then(Value::as_f64)
+        self.literal(socket).as_deref().and_then(Value::as_f64)
     }
 
     pub fn literal_i64(&self, socket: &str) -> Option<i64> {
-        self.literal(socket).as_ref().and_then(Value::as_i64)
+        self.literal(socket).as_deref().and_then(Value::as_i64)
     }
 
     pub fn literal_bool(&self, socket: &str) -> Option<bool> {
-        self.literal(socket).as_ref().and_then(Value::as_bool)
+        self.literal(socket).as_deref().and_then(Value::as_bool)
     }
 
     // --------------------------------------------------------- parameters
 
-    pub fn param(&self, name: &str) -> Option<Value> {
+    pub fn param(&self, name: &str) -> Option<Cow<'a, Value>> {
         self.node.param(name).or_else(|| {
             self.template
                 .param_spec(name)
-                .map(|p| p.default.clone())
+                .map(|p| Cow::Borrowed(&p.default))
                 .filter(|v| !v.is_null())
         })
     }
 
-    pub fn param_str(&self, name: &str) -> Option<String> {
-        self.param(name).and_then(|v| v.as_str().map(str::to_owned))
+    pub fn param_str(&self, name: &str) -> Option<Cow<'a, str>> {
+        borrowed_str(self.param(name)?)
     }
 
     pub fn param_f64(&self, name: &str) -> Option<f64> {
-        self.param(name).as_ref().and_then(Value::as_f64)
+        self.param(name).as_deref().and_then(Value::as_f64)
     }
 
     pub fn param_i64(&self, name: &str) -> Option<i64> {
-        self.param(name).as_ref().and_then(Value::as_i64)
+        self.param(name).as_deref().and_then(Value::as_i64)
     }
 
     pub fn param_bool(&self, name: &str) -> Option<bool> {
-        self.param(name).as_ref().and_then(Value::as_bool)
+        self.param(name).as_deref().and_then(Value::as_bool)
     }
 }
 
@@ -713,6 +718,14 @@ impl<E> EvalError<E> {
             Self::Node { source, .. } => Some(source),
             _ => None,
         }
+    }
+}
+
+/// Keep a borrowed string borrowed; only an owned value has to allocate.
+fn borrowed_str(value: Cow<'_, Value>) -> Option<Cow<'_, str>> {
+    match value {
+        Cow::Borrowed(value) => value.as_str().map(Cow::Borrowed),
+        Cow::Owned(value) => value.as_str().map(|s| Cow::Owned(s.to_owned())),
     }
 }
 

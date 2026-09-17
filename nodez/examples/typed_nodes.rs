@@ -305,8 +305,8 @@ impl NodeData for StackNode {
         }
     }
 
-    fn input_value(&self, socket: &str) -> Option<Value> {
-        Some(match (self, socket) {
+    fn input_value(&self, socket: &str) -> Option<std::borrow::Cow<'_, Value>> {
+        Some(std::borrow::Cow::Owned(match (self, socket) {
             (Self::Image { repository, .. }, "repository") => repository.to_value(),
             (Self::Image { tag, .. }, "tag") => tag.to_value(),
             (Self::Port { host, .. }, "host") => host.to_value(),
@@ -316,7 +316,7 @@ impl NodeData for StackNode {
             (Self::EnvFile { path }, "path") => path.to_value(),
             (Self::Service { replicas, .. }, "replicas") => replicas.to_value(),
             _ => return None,
-        })
+        }))
     }
 
     fn set_input_value(&mut self, socket: &str, value: Value) {
@@ -333,13 +333,13 @@ impl NodeData for StackNode {
         }
     }
 
-    fn param(&self, name: &str) -> Option<Value> {
-        Some(match (self, name) {
+    fn param(&self, name: &str) -> Option<std::borrow::Cow<'_, Value>> {
+        Some(std::borrow::Cow::Owned(match (self, name) {
             (Self::Port { protocol, .. }, "protocol") => protocol.to_value(),
             (Self::Service { name: n, .. }, "name") => n.to_value(),
             (Self::Service { restart, .. }, "restart") => restart.to_value(),
             _ => return None,
-        })
+        }))
     }
 
     fn set_param(&mut self, name: &str, value: Value) {

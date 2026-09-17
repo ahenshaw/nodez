@@ -1,6 +1,7 @@
 //! The graph model: nodes, connections, and the editing operations that keep
 //! them consistent.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 
@@ -95,19 +96,20 @@ impl From<&SocketRef> for SocketRef {
 /// name. A domain that would rather store its own Rust types implements this
 /// trait for them and uses [`Graph<MyNode>`](Graph) instead.
 ///
-/// Values cross this boundary owned rather than borrowed, because an
-/// implementation backed by typed fields has no stored `Value` to lend out.
+/// Values come back as [`Cow`] so that a payload holding real `Value`s can lend
+/// them, while one backed by typed fields — which has none to lend — can build
+/// one and hand it over. Nobody pays for the other's representation.
 pub trait NodeData: Clone {
     /// A fresh instance of a template, carrying its default values.
     fn new(template: &NodeTemplate) -> Self;
 
     /// The inline value of an input socket, if it has one.
-    fn input_value(&self, socket: &str) -> Option<Value>;
+    fn input_value(&self, socket: &str) -> Option<Cow<'_, Value>>;
 
     fn set_input_value(&mut self, socket: &str, value: Value);
 
     /// The value of a non-socket parameter.
-    fn param(&self, name: &str) -> Option<Value>;
+    fn param(&self, name: &str) -> Option<Cow<'_, Value>>;
 
     fn set_param(&mut self, name: &str, value: Value);
 
@@ -140,16 +142,16 @@ impl NodeData for DynNode {
         data
     }
 
-    fn input_value(&self, socket: &str) -> Option<Value> {
-        self.input_values.get(socket).cloned()
+    fn input_value(&self, socket: &str) -> Option<Cow<'_, Value>> {
+        self.input_values.get(socket).map(Cow::Borrowed)
     }
 
     fn set_input_value(&mut self, socket: &str, value: Value) {
         self.input_values.insert(socket.to_owned(), value);
     }
 
-    fn param(&self, name: &str) -> Option<Value> {
-        self.params.get(name).cloned()
+    fn param(&self, name: &str) -> Option<Cow<'_, Value>> {
+        self.params.get(name).map(Cow::Borrowed)
     }
 
     fn set_param(&mut self, name: &str, value: Value) {
@@ -199,7 +201,7 @@ pub struct Node<N = DynNode> {
 
 impl<N: NodeData> Node<N> {
     /// Value of an unconnected input socket.
-    pub fn input_value(&self, socket: &str) -> Option<Value> {
+    pub fn input_value(&self, socket: &str) -> Option<Cow<'_, Value>> {
         self.data.input_value(socket)
     }
 
@@ -207,7 +209,7 @@ impl<N: NodeData> Node<N> {
         self.data.set_input_value(socket.as_ref(), value.into());
     }
 
-    pub fn param(&self, name: &str) -> Option<Value> {
+    pub fn param(&self, name: &str) -> Option<Cow<'_, Value>> {
         self.data.param(name)
     }
 

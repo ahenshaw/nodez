@@ -911,6 +911,7 @@ impl NodeEditor {
                     let mut value = graph
                         .node(geom.id)
                         .and_then(|n| n.input_value(&spec.name))
+                        .map(std::borrow::Cow::into_owned)
                         .unwrap_or_else(|| spec.default.clone());
                     let widget_rect = self.split_row(
                         painter,
@@ -947,6 +948,7 @@ impl NodeEditor {
                     let mut value = graph
                         .node(geom.id)
                         .and_then(|n| n.param(&spec.name))
+                        .map(std::borrow::Cow::into_owned)
                         .unwrap_or_else(|| spec.default.clone());
                     let widget_rect = self.split_row(
                         painter,
