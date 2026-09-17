@@ -1,3 +1,8 @@
 /target
 /stack-graph.json
 /stack-graph.yaml
+
+# built extension module and Python caches
+nodez-py/python/nodez.so
+__pycache__/
+*.pyc

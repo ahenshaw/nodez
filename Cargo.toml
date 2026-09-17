@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["nodez", "nodez-demo"]
+members = ["nodez", "nodez-demo", "nodez-py"]
 default-members = ["nodez-demo"]
 
 [workspace.package]

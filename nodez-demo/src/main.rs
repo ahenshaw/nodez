@@ -24,6 +24,20 @@ use generate::Generated;
 const WINDOW_TITLE: &str = "nodez \u{2014} stack config editor";
 
 fn main() -> eframe::Result {
+    // `--print` generates the sample stack's config and exits, so the emitter
+    // can be exercised without a display.
+    if std::env::args().any(|arg| arg == "--print") {
+        let domain = Domain::new();
+        let style = EditorStyle::blender_dark();
+        let graph = sample::build(&domain, &style);
+        let generated = generate::generate(&graph, &domain);
+        for problem in &generated.problems {
+            eprintln!("warning: {problem}");
+        }
+        print!("{}", generated.text);
+        return Ok(());
+    }
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1480.0, 920.0])

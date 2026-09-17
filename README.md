@@ -16,10 +16,16 @@ domain needs — the bundled demo turns it into a container-stack config file.
 |---|---|
 | [`nodez/`](nodez) | The library: graph model, traversal, and the egui editor widget |
 | [`nodez-demo/`](nodez-demo) | A visual generator for container-stack config files |
+| [`nodez-py/`](nodez-py) | Python bindings, with the same demo in Python |
 
 ```
-cargo run          # the demo app
-cargo test         # model, emitter and doc tests
+cargo run                  # the demo app
+cargo run -- --print       # generate the sample config headlessly
+cargo test                 # model, emitter and doc tests
+
+./nodez-py/build.sh                        # build the Python extension module
+cd nodez-py/python && python3 demo.py      # the same demo, driven from Python
+cd nodez-py/python && python3 test_nodez.py
 ```
 
 ## The two halves
@@ -174,6 +180,81 @@ Save / Load round-trip the graph as JSON (serde, on by default). A graph saved
 against an older library is repaired on load by `Graph::validate`, which drops
 nodes whose template is gone and wires that no longer typecheck, and fills in
 values for sockets that have since been added.
+
+## Python
+
+The bindings expose the whole model and the editor. A library is described with
+the same pieces as in Rust, with types and templates addressed by name:
+
+```python
+import nodez
+
+lib = nodez.Library()
+lib.add_type("Text", "#70B2FF")
+lib.add_type("Number", "#A1A1A1")
+lib.allow_cast("Number", "Text")   # a Number may be dropped into a Text socket
+
+W, S, P = nodez.Widget, nodez.Socket, nodez.Param
+lib.add_template(
+    "join", "Join Text",
+    category="Convert",
+    inputs=[S("parts", "Text", multi=True)],
+    params=[P("separator", W.text(), default=", ")],
+    outputs=[S("out", "Text")],
+)
+```
+
+Graphs are built, type-checked and traversed the same way:
+
+```python
+g = nodez.Graph()
+a = g.add_node(lib, "text")
+b = g.add_node(lib, "join")
+g.set_input(lib, a, "value", "hello")
+g.connect(lib, (a, "out"), (b, "parts"))          # raises ValueError if refused
+g.why_not_connect(lib, (b, "out"), (a, "value"))  # -> "that link would create a cycle"
+
+g.topological_order(); g.ancestors(b); g.roots(); g.depths()
+```
+
+`evaluate` takes a callback instead of a closure. It is handed an `EvalNode`
+holding that node's values and the results of everything upstream, and returns
+whatever the node should become — so a config file is a fold over the graph:
+
+```python
+def rule(node):
+    if node.type == "text":
+        return node.literal("value", "")
+    if node.type == "join":
+        return node.param("separator").join(node.inputs("parts"))
+    raise ValueError(f"no rule for {node.type}")
+
+text = g.evaluate(lib, b, rule)
+```
+
+An exception raised in the callback propagates out of `evaluate` unchanged, with
+the offending node reported.
+
+`nodez.edit` opens the editor on a graph and blocks until the window closes,
+editing the graph in place. Give it `on_change` and whatever that returns is
+shown beside the canvas, so the config regenerates as you wire:
+
+```python
+def preview(edited):
+    return generate(lib, edited)
+
+nodez.edit(lib, g, title="my editor", on_change=preview)
+print(generate(lib, g))     # g now holds whatever was built
+```
+
+`nodez-py/python/` holds [`stack.py`](nodez-py/python/stack.py) (the same domain
+and emitter as the Rust demo), [`demo.py`](nodez-py/python/demo.py) and
+[`nodez.pyi`](nodez-py/python/nodez.pyi). `demo.py --print` emits a document
+byte-identical to `cargo run -- --print`, and `demo.py --explore` prints what
+the traversal API sees.
+
+There is no maturin step: the crate is a plain cdylib whose entry point is
+`PyInit_nodez`, so `build.sh` just renames the shared library to `nodez.so`.
 
 ## License
 
