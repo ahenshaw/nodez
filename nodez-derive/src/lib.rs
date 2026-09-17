@@ -184,7 +184,23 @@ fn choice_editor(input: &DeriveInput) -> syn::Result<TokenStream2> {
             ));
         }
         let ident = &variant.ident;
-        let text = kebab_case(&ident.to_string());
+        // A variant may spell its option differently: `V3_9` is `3.9` to a
+        // reader, and Rust has no way to name that variant directly.
+        let mut renamed = None;
+        for attr in &variant.attrs {
+            if !attr.path().is_ident("socket") {
+                continue;
+            }
+            attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("rename") {
+                    renamed = Some(meta.value()?.parse::<LitStr>()?.value());
+                    Ok(())
+                } else {
+                    Err(meta.error("a variant only takes `rename`"))
+                }
+            })?;
+        }
+        let text = renamed.unwrap_or_else(|| kebab_case(&ident.to_string()));
         options.push(quote!(#text));
         to_arms.push(quote!(Self::#ident => #text));
         from_arms.push(quote!(#text => Some(Self::#ident)));
@@ -260,6 +276,7 @@ struct NodeAttrs {
     output_name: Option<LitStr>,
     header_color: Option<LitStr>,
     produces: Option<Type>,
+    keywords: Option<LitStr>,
 }
 
 fn node_impl(input: &DeriveInput) -> syn::Result<TokenStream2> {
@@ -285,10 +302,12 @@ fn node_impl(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 "output_name" => attrs.output_name = Some(meta.value()?.parse()?),
                 "header_color" => attrs.header_color = Some(meta.value()?.parse()?),
                 "produces" => attrs.produces = Some(meta.value()?.parse()?),
+                "keywords" => attrs.keywords = Some(meta.value()?.parse()?),
                 other => {
                     return Err(meta.error(format!(
                         "unknown node option `{other}`; expected id, label, category, \
-                         description, width, output, output_name, header_color or produces"
+                         description, width, output, output_name, header_color, produces \
+                         or keywords"
                     )));
                 }
             }
@@ -312,6 +331,19 @@ fn node_impl(input: &DeriveInput) -> syn::Result<TokenStream2> {
         .width
         .map(|w| quote!(#w))
         .unwrap_or_else(|| quote!(150.0f32));
+    // Extra search terms for the add menu, comma-separated.
+    let keywords = match attrs.keywords.as_ref() {
+        Some(lit) => {
+            let terms: Vec<String> = lit
+                .value()
+                .split(',')
+                .map(|t| t.trim().to_owned())
+                .filter(|t| !t.is_empty())
+                .collect();
+            quote!(template = template.keywords([#(#terms),*]);)
+        }
+        None => quote!(),
+    };
     let header_color = match attrs.header_color.as_ref() {
         Some(lit) => {
             let (r, g, b) = parse_hex(lit)?;
@@ -386,6 +418,14 @@ fn node_impl(input: &DeriveInput) -> syn::Result<TokenStream2> {
                     );))
                     .unwrap_or_default();
                 let hint = spec_hint(&spec.hint, &label);
+                let min = spec
+                    .min
+                    .as_ref()
+                    .map_or_else(|| quote!(None), |v| quote!(Some(f64::from(#v))));
+                let max = spec
+                    .max
+                    .as_ref()
+                    .map_or_else(|| quote!(None), |v| quote!(Some(f64::from(#v))));
                 // Two combinations are silently meaningless, and a macro cannot
                 // see trait impls to reject them at expansion. Check when the
                 // template is built instead, so they fail loudly in dev builds.
@@ -421,9 +461,13 @@ fn node_impl(input: &DeriveInput) -> syn::Result<TokenStream2> {
                         // A payload type that offers a widget gets an inline
                         // editor; one that does not is link-only. The check is
                         // at runtime because a macro cannot see trait impls.
-                        let widget = ::nodez::typed::__private::with_hint(
-                            <#payload as ::nodez::typed::SocketType>::widget(),
-                            #hint,
+                        let widget = ::nodez::typed::__private::with_range(
+                            ::nodez::typed::__private::with_hint(
+                                <#payload as ::nodez::typed::SocketType>::widget(),
+                                #hint,
+                            ),
+                            #min,
+                            #max,
                         );
                         #default_needs_widget
                         #optional_needs_link_only
@@ -494,6 +538,7 @@ fn node_impl(input: &DeriveInput) -> syn::Result<TokenStream2> {
                     .category(#category)
                     .description(#description)
                     .width(#width);
+                #keywords
                 #header_color
                 #(#schema)*
                 #output
@@ -526,6 +571,8 @@ struct ParsedField {
     description: Option<String>,
     default: Option<Expr>,
     hint: Option<String>,
+    min: Option<Expr>,
+    max: Option<Expr>,
     show_label: bool,
 }
 
@@ -535,6 +582,8 @@ fn parse_field(field: &syn::Field) -> syn::Result<ParsedField> {
     let mut description = None;
     let mut default = None;
     let mut hint = None;
+    let mut min: Option<Expr> = None;
+    let mut max: Option<Expr> = None;
     let mut show_label = true;
     let mut is_input = false;
 
@@ -561,11 +610,13 @@ fn parse_field(field: &syn::Field) -> syn::Result<ParsedField> {
                 }
                 "default" => default = Some(meta.value()?.parse()?),
                 "hint" => hint = Some(meta.value()?.parse::<LitStr>()?.value()),
+                "min" => min = Some(meta.value()?.parse()?),
+                "max" => max = Some(meta.value()?.parse()?),
                 "hide_label" => show_label = false,
                 other => {
                     return Err(meta.error(format!(
                         "unknown field option `{other}`; expected label, description, \
-                         default or hide_label"
+                         default, hint, min, max or hide_label"
                     )));
                 }
             }
@@ -589,6 +640,8 @@ fn parse_field(field: &syn::Field) -> syn::Result<ParsedField> {
         description,
         default,
         hint,
+        min,
+        max,
         show_label,
     })
 }

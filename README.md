@@ -16,7 +16,7 @@ domain needs — the bundled demo turns it into a container-stack config file.
 |---|---|
 | [`nodez/`](nodez) | The library: graph model, traversal, and the egui editor widget |
 | [`nodez-demo/`](nodez-demo) | A visual generator for container-stack config files |
-| [`nodez-derive/`](nodez-derive) | **Prototype.** Derive macros describing nodes as Rust types |
+| [`nodez-derive/`](nodez-derive) | Derive macros describing nodes as Rust types |
 
 ```
 cargo run                  # the demo app
@@ -213,11 +213,11 @@ That is what [`nodez-demo`](nodez-demo/src/main.rs) does; its `main.rs` is 49
 lines, of which the editor window is seven. `EditorApp::ui` draws the same thing
 inside a `Ui` you already have, for embedding it in something larger.
 
-## Prototype: nodes as Rust types
+## Nodes as Rust types
 
-Behind the non-default `derive` feature is an alternative way to describe a
-domain, where the schema and the evaluation rules come from Rust types instead
-of runtime builders. A field *is* a socket, its type gives the socket type, and
+Behind the `derive` feature, the schema and the evaluation rules come from Rust
+types instead of runtime builders. This is how
+[`nodez-demo`](nodez-demo/src/nodes.rs) describes its fourteen node kinds. A field *is* a socket, its type gives the socket type, and
 its outer wrapper gives the arity:
 
 ```rust
@@ -259,8 +259,10 @@ of the project, and either can be overridden.
 maps of `Value`, while a domain can store its own enum instead. The example
 builds the same graph both ways and gets identical output.
 
-See [`nodez/examples/typed_nodes.rs`](nodez/examples/typed_nodes.rs). None of
-this is on by default, and the dynamic API is unchanged.
+[`nodez-demo/src/nodes.rs`](nodez-demo/src/nodes.rs) is the worked example;
+[`nodez/examples/typed_nodes.rs`](nodez/examples/typed_nodes.rs) is a smaller
+one that also demonstrates typed storage. The dynamic API is unchanged and still
+what `Graph` uses by default.
 
 ## License
 

@@ -482,6 +482,27 @@ pub mod __private {
         Ok(Multi::new(values, sources))
     }
 
+    /// Clamp a numeric widget to a range. A type says what kind of editor a
+    /// socket gets; the socket says what values make sense in its place — a
+    /// port is 1..=65535 wherever an `i64` otherwise is not.
+    pub fn with_range(widget: Widget, low: Option<f64>, high: Option<f64>) -> Widget {
+        match widget {
+            Widget::Int { min, max, speed, suffix } => Widget::Int {
+                min: low.map_or(min, |v| v as i64),
+                max: high.map_or(max, |v| v as i64),
+                speed,
+                suffix,
+            },
+            Widget::Float { min, max, speed, suffix } => Widget::Float {
+                min: low.unwrap_or(min),
+                max: high.unwrap_or(max),
+                speed,
+                suffix,
+            },
+            other => other,
+        }
+    }
+
     /// Give a text widget a placeholder when it has none. The socket type
     /// chooses the kind of editor; the field it sits on names it.
     pub fn with_hint(widget: Widget, hint: &str) -> Widget {

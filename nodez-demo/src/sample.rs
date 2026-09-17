@@ -1,102 +1,93 @@
 //! A starting graph, so the app has something to show on first run.
 //!
-//! It is also a worked example of building a graph entirely in code: register
-//! nodes, set their inline values, wire them up, then let `nodez::layered`
-//! place them.
+//! Also a worked example of building a graph in code: add nodes by template id,
+//! set their inline values, wire them up, then let `nodez::layered` place them.
 
 use egui::pos2;
-use nodez::{EditorStyle, Graph, LayoutOptions, NodeId, TemplateId, node_size};
+use nodez::{EditorStyle, Graph, LayoutOptions, NodeId, NodeLibrary, Value, node_size};
 
-use crate::domain::Domain;
-
-pub fn build(domain: &Domain, style: &EditorStyle) -> Graph {
-    let library = &domain.library;
-    let t = &domain.templates;
+pub fn build(library: &NodeLibrary, style: &EditorStyle) -> Graph {
     let mut graph = Graph::new();
 
-    // A helper so the wiring below reads like the config it produces.
-    let add = |graph: &mut Graph, template: TemplateId| -> NodeId {
-        graph.add_node(library, template, pos2(0.0, 0.0))
+    let add = |graph: &mut Graph, template: &str| -> NodeId {
+        let id = library
+            .id(template)
+            .unwrap_or_else(|| panic!("`{template}` is registered"));
+        graph.add_node(library, id, pos2(0.0, 0.0))
     };
 
-    let frontend = add(&mut graph, t.network);
-    set_input(&mut graph, frontend, "name", "frontend");
-    let backend = add(&mut graph, t.network);
-    set_input(&mut graph, backend, "name", "backend");
+    let frontend = add(&mut graph, "network");
+    let backend = add(&mut graph, "network");
+    let web_image = add(&mut graph, "image");
+    let web_port = add(&mut graph, "port");
+    let web_conf = add(&mut graph, "volume");
+    let web = add(&mut graph, "service");
+    let api_image = add(&mut graph, "image");
+    let api_port = add(&mut graph, "port");
+    let api_replicas = add(&mut graph, "number");
+    let db_password = add(&mut graph, "secret");
+    let dsn_prefix = add(&mut graph, "text");
+    let dsn_suffix = add(&mut graph, "text");
+    let dsn = add(&mut graph, "join");
+    let api_env = add(&mut graph, "env_var");
+    let api = add(&mut graph, "service");
+    let db_image = add(&mut graph, "image");
+    let db_volume = add(&mut graph, "volume");
+    let db_env = add(&mut graph, "env_var");
+    let db_health = add(&mut graph, "healthcheck");
+    let db = add(&mut graph, "service");
+    let stack = add(&mut graph, "stack");
 
-    // ------------------------------------------------------------- web
-    let web_image = add(&mut graph, t.image);
-    set_input(&mut graph, web_image, "repository", "nginx");
-    set_input(&mut graph, web_image, "tag", "1.27-alpine");
+    for (node, socket, value) in [
+        (frontend, "name", Value::from("frontend")),
+        (backend, "name", Value::from("backend")),
+        (web_image, "repository", Value::from("nginx")),
+        (web_image, "tag", Value::from("1.27-alpine")),
+        (web_port, "host", Value::Int(8080)),
+        (web_port, "container", Value::Int(80)),
+        (web_conf, "source", Value::from("./nginx.conf")),
+        (web_conf, "target", Value::from("/etc/nginx/nginx.conf")),
+        (web_conf, "read_only", Value::Bool(true)),
+        (api_image, "repository", Value::from("ghcr.io/acme/api")),
+        (api_image, "tag", Value::from("2.4.0")),
+        (api_port, "host", Value::Int(9000)),
+        (api_port, "container", Value::Int(9000)),
+        (api_replicas, "value", Value::Int(3)),
+        (db_password, "name", Value::from("DB_PASSWORD")),
+        // DATABASE_URL is assembled from literals and a secret reference,
+        // which is what the Join Text node is for.
+        (dsn_prefix, "value", Value::from("postgres://app:")),
+        (dsn_suffix, "value", Value::from("@db:5432/app")),
+        (api_env, "key", Value::from("DATABASE_URL")),
+        (db_image, "repository", Value::from("postgres")),
+        (db_image, "tag", Value::from("16-alpine")),
+        (db_volume, "source", Value::from("pgdata")),
+        (db_volume, "target", Value::from("/var/lib/postgresql/data")),
+        (db_env, "key", Value::from("POSTGRES_PASSWORD")),
+        (db_health, "command", Value::from("pg_isready -U app")),
+        (db_health, "interval", Value::Int(10)),
+    ] {
+        graph
+            .node_mut(node)
+            .expect("just added")
+            .set_input_value(socket, value);
+    }
 
-    let web_port = add(&mut graph, t.port);
-    set_input(&mut graph, web_port, "host", 8080_i64);
-    set_input(&mut graph, web_port, "container", 80_i64);
+    for (node, param, value) in [
+        (dsn, "separator", Value::from("")),
+        (web, "name", Value::from("web")),
+        (api, "name", Value::from("api")),
+        (api, "restart", Value::Choice("always".to_owned())),
+        (db, "name", Value::from("db")),
+        (stack, "name", Value::from("acme-platform")),
+    ] {
+        graph
+            .node_mut(node)
+            .expect("just added")
+            .set_param(param, value);
+    }
 
-    let web_conf = add(&mut graph, t.volume);
-    set_input(&mut graph, web_conf, "source", "./nginx.conf");
-    set_input(&mut graph, web_conf, "target", "/etc/nginx/nginx.conf");
-    set_input(&mut graph, web_conf, "read_only", true);
-
-    let web = add(&mut graph, t.service);
-    set_param(&mut graph, web, "name", "web");
-
-    // ------------------------------------------------------------- api
-    let api_image = add(&mut graph, t.image);
-    set_input(&mut graph, api_image, "repository", "ghcr.io/acme/api");
-    set_input(&mut graph, api_image, "tag", "2.4.0");
-
-    let api_port = add(&mut graph, t.port);
-    set_input(&mut graph, api_port, "host", 9000_i64);
-    set_input(&mut graph, api_port, "container", 9000_i64);
-
-    // DATABASE_URL is assembled from literals and a secret reference, which is
-    // what the Join Text node is for.
-    let db_password = add(&mut graph, t.secret);
-    set_input(&mut graph, db_password, "name", "DB_PASSWORD");
-
-    let dsn_prefix = add(&mut graph, t.text);
-    set_input(&mut graph, dsn_prefix, "value", "postgres://app:");
-    let dsn_suffix = add(&mut graph, t.text);
-    set_input(&mut graph, dsn_suffix, "value", "@db:5432/app");
-
-    let dsn = add(&mut graph, t.join);
-    set_param(&mut graph, dsn, "separator", "");
-
-    let api_env = add(&mut graph, t.env_var);
-    set_input(&mut graph, api_env, "key", "DATABASE_URL");
-
-    let api_replicas = add(&mut graph, t.number);
-    set_input(&mut graph, api_replicas, "value", 3.0);
-
-    let api = add(&mut graph, t.service);
-    set_param(&mut graph, api, "name", "api");
-    set_param(&mut graph, api, "restart", nodez::Value::Choice("always".to_owned()));
-
-    // -------------------------------------------------------------- db
-    let db_image = add(&mut graph, t.image);
-    set_input(&mut graph, db_image, "repository", "postgres");
-    set_input(&mut graph, db_image, "tag", "16-alpine");
-
-    let db_volume = add(&mut graph, t.volume);
-    set_input(&mut graph, db_volume, "source", "pgdata");
-    set_input(&mut graph, db_volume, "target", "/var/lib/postgresql/data");
-
-    let db_env = add(&mut graph, t.env_var);
-    set_input(&mut graph, db_env, "key", "POSTGRES_PASSWORD");
-
-    let db_health = add(&mut graph, t.healthcheck);
-    set_input(&mut graph, db_health, "command", "pg_isready -U app");
-    set_input(&mut graph, db_health, "interval", 10_i64);
-
-    let db = add(&mut graph, t.service);
-    set_param(&mut graph, db, "name", "db");
-
-    let stack = add(&mut graph, t.stack);
-    set_param(&mut graph, stack, "name", "acme-platform");
-
-    // ------------------------------------------------------------ wires
-    let links: &[(NodeId, &str, NodeId, &str)] = &[
+    for (from, from_socket, to, to_socket) in [
         (web_image, "out", web, "image"),
         (web_port, "out", web, "ports"),
         (web_conf, "out", web, "volumes"),
@@ -124,11 +115,10 @@ pub fn build(domain: &Domain, style: &EditorStyle) -> Graph {
         (db, "out", stack, "services"),
         (frontend, "out", stack, "networks"),
         (backend, "out", stack, "networks"),
-    ];
-    for &(from, from_socket, to, to_socket) in links {
+    ] {
         graph
             .connect(library, (from, from_socket), (to, to_socket))
-            .expect("sample graph is well-typed and acyclic");
+            .expect("the sample graph is well-typed and acyclic");
     }
 
     let _ = nodez::layered(
@@ -143,16 +133,4 @@ pub fn build(domain: &Domain, style: &EditorStyle) -> Graph {
     );
 
     graph
-}
-
-fn set_input(graph: &mut Graph, node: NodeId, socket: &str, value: impl Into<nodez::Value>) {
-    if let Some(node) = graph.node_mut(node) {
-        node.set_input_value(socket, value);
-    }
-}
-
-fn set_param(graph: &mut Graph, node: NodeId, param: &str, value: impl Into<nodez::Value>) {
-    if let Some(node) = graph.node_mut(node) {
-        node.set_param(param, value);
-    }
 }
