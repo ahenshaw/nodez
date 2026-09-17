@@ -125,10 +125,10 @@ cargo run -p nodez --features derive,app --example quickstart
 | `#[input] x: Multi<T>` | a socket accepting any number of links, in order |
 | `x: T` (no attribute) | a parameter, drawn in the body, never wired |
 
-A `Multi` socket is drawn as a pill spanning one attachment point per link, with
-a hole at the end for the next one. Where you drop a wire decides where it lands
-in the order, and dragging a link up or down reorders it. The order is stored
-per link, not inferred from when it was made.
+A `Multi` socket draws one attachment point per link plus an empty one below
+them, so where you drop a wire decides where it lands in the order, and dragging
+a link up or down reorders it. The order is stored per link, not inferred from
+when it was made.
 
 A wire type that offers an inline editor — `String`, `i64`, `f64`, `bool`, or
 anything with `#[socket(widget = …)]` — makes a socket you can also type into.

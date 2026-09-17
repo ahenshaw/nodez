@@ -56,7 +56,8 @@ pub struct EditorStyle {
     pub socket_grab_padding: f32,
     /// Vertical spacing between the attachment points of a multi-input socket.
     pub multi_slot_height: f32,
-    /// Fill behind a multi-input socket's slots, tinted by the socket colour.
+    /// How far the rail behind a multi-input socket's slots is tinted toward
+    /// the socket colour. 0 is the node fill, 1 is the socket colour itself.
     pub multi_slot_track: f32,
     /// Outline drawn around a socket that would accept the wire being dragged.
     pub socket_candidate_outline: Color32,
@@ -138,7 +139,7 @@ impl EditorStyle {
             socket_outline_width: 1.0,
             socket_grab_padding: 6.0,
             multi_slot_height: 13.0,
-            multi_slot_track: 0.45,
+            multi_slot_track: 0.78,
             socket_candidate_outline: Color32::from_rgb(0xFF, 0xFF, 0xFF),
             socket_rejected_dim: 0.25,
 

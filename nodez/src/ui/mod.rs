@@ -764,44 +764,29 @@ impl NodeEditor {
             self.state.interaction = Interaction::Idle;
         }
 
-        // One pill per multi-input, spanning its attachment points.
-        struct Pill {
-            index: usize,
-            top: f32,
-            bottom: f32,
-            free: Option<Pos2>,
-            ty: crate::types::DataTypeId,
-        }
-        let mut pills: Vec<Pill> = Vec::new();
+        // One rail per multi-input, behind its slots.
+        let mut rails: Vec<(usize, f32, f32, crate::types::DataTypeId)> = Vec::new();
         for socket in geom.sockets.iter().filter(|s| s.slot.is_some()) {
-            match pills.iter_mut().find(|pill| pill.index == socket.index) {
-                Some(pill) => {
-                    pill.top = pill.top.min(socket.center.y);
-                    pill.bottom = pill.bottom.max(socket.center.y);
-                    if socket.is_free_slot {
-                        pill.free = Some(socket.center);
-                    }
+            match rails.iter_mut().find(|(index, ..)| *index == socket.index) {
+                Some((_, top, bottom, _)) => {
+                    *top = top.min(socket.center.y);
+                    *bottom = bottom.max(socket.center.y);
                 }
-                None => pills.push(Pill {
-                    index: socket.index,
-                    top: socket.center.y,
-                    bottom: socket.center.y,
-                    free: socket.is_free_slot.then_some(socket.center),
-                    ty: socket.ty,
-                }),
+                None => rails.push((socket.index, socket.center.y, socket.center.y, socket.ty)),
             }
         }
-        for pill in &pills {
-            draw::paint_multi_socket(
-                painter,
-                geom.body.left(),
-                pill.top,
-                pill.bottom,
-                pill.free,
-                library.types.color(pill.ty),
-                &self.style,
-                zoom,
-            );
+        for (_, top, bottom, ty) in rails {
+            if bottom > top {
+                draw::paint_multi_track(
+                    painter,
+                    geom.body.left(),
+                    top,
+                    bottom,
+                    library.types.color(ty),
+                    &self.style,
+                    zoom,
+                );
+            }
         }
 
         // Sockets are allocated before the body widgets so a widget wins in the
@@ -839,10 +824,15 @@ impl NodeEditor {
             }
 
             let state = self.socket_state(graph, library, socket, geom.id, hovered_socket);
-            if socket.slot.is_some() {
-                // The pill is already drawn; a slot only needs marking when a
-                // wire is over it.
-                draw::paint_slot_highlight(painter, socket.center, &self.style, zoom, state);
+            if socket.is_free_slot {
+                draw::paint_free_slot(
+                    painter,
+                    socket.center,
+                    library.types.color(socket.ty),
+                    &self.style,
+                    zoom,
+                    state,
+                );
             } else {
                 draw::paint_socket(
                     painter,
