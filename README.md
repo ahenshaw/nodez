@@ -117,7 +117,48 @@ cargo run -p nodez --features derive,app --example quickstart
 
 ![The quickstart: five nodes building a URL](https://raw.githubusercontent.com/ahenshaw/nodez/main/docs/quickstart.png)
 
-## What a field means
+## The derive, at a glance
+
+Everything is optional; the second column is what you get if you say nothing.
+
+**`#[derive(SocketType)]` — a value that travels along a wire**
+
+| `#[socket(…)]` | default | |
+|---|---|---|
+| `color = "#RRGGBB"` | hashed from the name | the socket and the wires leaving it |
+| `shape = "…"` | `circle` | `circle`, `diamond`, `diamond_dot`, `square` |
+| `widget = …` | none | `text`, `int`, `float`, `checkbox`, `choice` |
+| `name = "…"` | the type's own name | what it registers and displays as |
+| `description = "…"` | — | socket tooltip |
+| `wildcard` | off | connects to every other type |
+| `rename = "…"` | variant name, kebab-cased | on an enum variant: its spelling in the dropdown |
+
+A type with a `widget` can be typed into when nothing is wired to it; one
+without is link-only. `choice` wants a fieldless enum, the rest a one-field
+tuple struct over `String`, `i64`, `f64` or `bool`. Those four are wire types
+already, so a field that is just a string or a number needs no wrapper.
+
+**`#[derive(NodeType)]` — a kind of node**
+
+| `#[node(…)]` | default | |
+|---|---|---|
+| `id = "…"` | struct name, snake_cased | what saved files refer to |
+| `label = "…"` | struct name, title-cased | shown in the header and the menu |
+| `category = "…"` | `Misc` | menu grouping and header tint |
+| `description = "…"` | — | tooltip in the add menu |
+| `keywords = "a, b"` | — | extra terms the add-menu search matches |
+| `width = …` | `150.0` | starting body width; rarely worth setting |
+| `output = T` | none | an output socket carrying `T`, **and** `Output = T` |
+| `produces = T` | `()` | `Output = T` with no socket, for a sink |
+| `output_name = "…"` | `out` | renames the output socket |
+| `header_color = "#RRGGBB"` | from the category | overrides the tint for this kind alone |
+
+`output` and `produces` both fix the type your `evaluate` returns; only `output`
+also puts a socket on the node. A node with nothing downstream — the root of a
+document, say — uses `produces`. Giving both is a compile error, and so is
+returning anything else from `evaluate`.
+
+**Fields**
 
 | you write | you get |
 |---|---|
@@ -126,24 +167,23 @@ cargo run -p nodez --features derive,app --example quickstart
 | `#[input] x: Multi<T>` | a socket accepting any number of links, in order |
 | `x: T` (no attribute) | a parameter, drawn in the body, never wired |
 
+| `#[input(…)]`, `#[param(…)]` | |
+|---|---|
+| `default = …` | what a new node starts with |
+| `label = "…"` | the row's label; `""` hides it |
+| `hint = "…"` | placeholder shown in an empty text box |
+| `description = "…"` | socket tooltip |
+| `min = …`, `max = …` | clamp a numeric widget, per socket rather than per type |
+| `hide_label` | parameters only: let the widget fill the row |
+
 A `Multi` socket draws one attachment point per link plus an empty one below
 them, so where you drop a wire decides where it lands in the order, and dragging
 a link up or down reorders it. The order is stored per link, not inferred from
 when it was made.
 
-A wire type that offers an inline editor — `String`, `i64`, `f64`, `bool`, or
-anything with `#[socket(widget = …)]` — makes a socket you can also type into.
-One that doesn't is link-only.
-
-That is why `Option` only says something on a link-only socket. An editable one
-always has a value, whether or not anything is wired to it, so an
-`Option<String>` would never be `None`; a debug assertion says so when a
-template is built.
-
-`#[input]` takes `default`, `label`, `hint`, `description`, `min` and `max`.
-`#[node]` takes `id`, `label`, `category`, `description`, `keywords`, `width`,
-`output`, `produces` and `header_color`, and all of them have defaults — `id`
-and `label` come from the struct name.
+`Option` only says something on a link-only socket. An editable one always has a
+value, whether or not anything is wired to it, so an `Option<String>` would
+never be `None`; a debug assertion says so when a template is built.
 
 ## What a fold is
 
