@@ -253,7 +253,7 @@ declaring.
 Colours are derived and need never be chosen: a socket type's from its name, a
 node header's from its category — or from the node's own id when it has no
 category, so nodes stay distinguishable either way. Both are stable for the life
-of the project, and either can be overridden.
+of the project, and either can be overridden. The demo overrides neither.
 
 `Graph<N>` also prototypes typed storage: `Graph<DynNode>` (the default) keeps
 maps of `Value`, while a domain can store its own enum instead. The example

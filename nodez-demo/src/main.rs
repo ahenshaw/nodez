@@ -6,7 +6,6 @@
 
 #![forbid(unsafe_code)]
 
-mod domain;
 mod generate;
 mod nodes;
 mod sample;
@@ -16,7 +15,7 @@ use nodez::EditorStyle;
 use nodez::app::{EditorApp, Preview};
 
 fn main() -> eframe::Result {
-    let (library, rules) = domain::build();
+    let (library, rules) = nodes::library();
     let style = EditorStyle::blender_dark();
     let graph = sample::build(&library, &style);
 

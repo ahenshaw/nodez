@@ -7,6 +7,10 @@
 //! `Multi<T>` is a fan-in.
 //!
 //! Replace this file to describe your own config format.
+//!
+//! No colours are chosen here: a socket type's comes from its name and a node
+//! header's from its category. Shapes stay explicit, because they mean
+//! something — a diamond is a per-element value, a square a collection.
 
 use nodez::{Evaluate, Fold, Multi, NodeError, NodeType, SocketType, Value};
 
@@ -17,62 +21,61 @@ use nodez::{Evaluate, Fold, Multi, NodeError, NodeType, SocketType, Value};
 // unless one is given; the shapes are semantic, so they stay explicit.
 
 #[derive(Clone, Debug, SocketType)]
-#[socket(color = "#C7C729", description = "A container image reference.")]
+#[socket(description = "A container image reference.")]
 pub struct ImageRef(String);
 
 /// One link may carry several entries, which is why this is a type of its own
 /// rather than the arity wrapper `Multi`.
 #[derive(Clone, Debug, SocketType)]
-#[socket(color = "#598C5C", shape = "diamond", description = "Environment entries.")]
+#[socket(shape = "diamond", description = "Environment entries.")]
 pub struct EnvList(Vec<String>);
 
 /// The original demo carried env files down the same socket as env entries and
 /// told them apart with a match. A type of their own does that in the schema.
 #[derive(Clone, Debug, SocketType)]
-#[socket(color = "#7FA66B", shape = "diamond", description = "A file of env entries.")]
+#[socket(shape = "diamond", description = "A file of env entries.")]
 pub struct EnvFileRef(String);
 
 #[derive(Clone, Debug, SocketType)]
-#[socket(color = "#E07A5F", shape = "diamond", description = "A published port.")]
+#[socket(shape = "diamond", description = "A published port.")]
 pub struct PortMap(String);
 
 #[derive(Clone, Debug, SocketType)]
-#[socket(color = "#6363C7", shape = "diamond", description = "A bind mount.")]
+#[socket(shape = "diamond", description = "A bind mount.")]
 pub struct Mount(Value);
 
 #[derive(Clone, Debug, SocketType)]
-#[socket(color = "#4CB3CC", description = "A network the stack declares.")]
+#[socket(description = "A network the stack declares.")]
 pub struct NetworkDef {
     name: String,
     driver: String,
 }
 
 #[derive(Clone, Debug, SocketType)]
-#[socket(color = "#D6A6CC", description = "A container health probe.")]
+#[socket(description = "A container health probe.")]
 pub struct Health(Value);
 
 #[derive(Clone, Debug, SocketType)]
-#[socket(color = "#E39B3A", shape = "square", description = "A described service.")]
+#[socket(shape = "square", description = "A described service.")]
 pub struct ServiceDef {
     name: String,
     body: Value,
 }
 
-/// What the whole graph folds to. The stack node has no output socket, so it
-/// says `produces` instead.
-#[derive(Clone, Debug, SocketType)]
-#[socket(color = "#E5E5E5", shape = "square")]
+/// What the whole graph folds to. The stack node has no output socket — it
+/// says `produces` instead — so this is never drawn and needs no wire type.
+#[derive(Clone, Debug)]
 pub struct StackDoc(pub Value);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, SocketType)]
-#[socket(color = "#CCA6D6", widget = choice)]
+#[socket(widget = choice)]
 pub enum Protocol {
     Tcp,
     Udp,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, SocketType)]
-#[socket(color = "#CCA6D6", widget = choice)]
+#[socket(widget = choice)]
 pub enum Driver {
     Bridge,
     Overlay,
@@ -81,7 +84,7 @@ pub enum Driver {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, SocketType)]
-#[socket(color = "#CCA6D6", widget = choice)]
+#[socket(widget = choice)]
 pub enum Restart {
     No,
     Always,
@@ -90,7 +93,7 @@ pub enum Restart {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, SocketType)]
-#[socket(color = "#CCA6D6", widget = choice)]
+#[socket(widget = choice)]
 pub enum Version {
     #[socket(rename = "3.9")]
     V3_9,
@@ -574,4 +577,25 @@ impl Evaluate<Config> for Stack {
                 .into(),
         ))
     }
+}
+
+// ------------------------------------------------------------------ library
+
+/// The library and the rules for folding a graph into a config document.
+pub fn library() -> (nodez::NodeLibrary, nodez::Rules<Config>) {
+    let mut library = nodez::NodeLibrary::new();
+    let mut rules = nodez::Rules::<Config>::new();
+    rules.register_all::<Nodes>(&mut library);
+
+    // Numbers and flags can be spelled as text; text cannot become either.
+    // This is what makes a Number socket droppable onto a Text input.
+    let types = &mut library.types;
+    if let (Some(text), Some(int), Some(flag)) =
+        (types.id("Text"), types.id("Int"), types.id("Bool"))
+    {
+        types.allow_cast(int, text);
+        types.allow_cast(flag, text);
+    }
+
+    (library, rules)
 }
