@@ -203,47 +203,66 @@ pub(crate) fn paint_socket(
     }
 }
 
-/// The rail behind a multi-input socket's attachment points, so a column of
-/// slots reads as one socket rather than several.
-pub(crate) fn paint_multi_track(
+/// A multi-input socket: one pill spanning its attachment points, so a column
+/// of links reads as a single socket.
+///
+/// The pill is solid where links land and has a hole punched at the free point
+/// on the end, which says there is room for one more without needing a separate
+/// marker beside it.
+#[allow(clippy::too_many_arguments)] // a painting helper; each argument is a distinct visual input
+pub(crate) fn paint_multi_socket(
     painter: &Painter,
     x: f32,
     top: f32,
     bottom: f32,
+    free: Option<Pos2>,
     color: Color32,
     style: &EditorStyle,
     zoom: f32,
 ) {
-    let half = (style.socket_radius * zoom).max(2.0) * 0.55;
-    let rect = Rect::from_min_max(pos2(x - half, top), pos2(x + half, bottom));
-    let radius = (half * 2.0).round().clamp(0.0, 255.0) as u8;
-    painter.rect_filled(
+    let radius = (style.socket_radius * zoom).max(2.0);
+    let rect = Rect::from_min_max(pos2(x - radius, top - radius), pos2(x + radius, bottom + radius));
+    let corner = radius.round().clamp(0.0, 255.0) as u8;
+    painter.rect(
         rect,
-        CornerRadius::same(radius),
-        lerp_color(style.node_fill, color, style.multi_slot_track),
+        CornerRadius::same(corner),
+        color,
+        Stroke::new(
+            (style.socket_outline_width * zoom).max(0.75),
+            style.socket_outline,
+        ),
+        StrokeKind::Middle,
     );
+    if let Some(center) = free {
+        painter.circle(
+            center,
+            radius * 0.55,
+            style.node_fill,
+            Stroke::new((style.socket_outline_width * zoom * 0.8).max(0.5), style.socket_outline),
+        );
+    }
 }
 
-/// The empty attachment point at the end of a multi-input: a hollow ring,
-/// saying "drop here to add one" without looking like a live connection.
-pub(crate) fn paint_free_slot(
+/// Mark one attachment point of a multi-input while a wire is over it.
+pub(crate) fn paint_slot_highlight(
     painter: &Painter,
     center: Pos2,
-    color: Color32,
     style: &EditorStyle,
     zoom: f32,
     state: SocketState,
 ) {
-    let radius = (style.socket_radius * zoom).max(2.0) * 0.72;
-    let (radius, stroke) = match state {
-        SocketState::Candidate => (
-            radius * 1.4,
-            Stroke::new((1.6 * zoom).max(1.5), style.socket_candidate_outline),
-        ),
-        SocketState::Rejected => (radius, Stroke::new(zoom.max(1.0), dim(color, 0.3))),
-        _ => (radius, Stroke::new(zoom.max(1.0), color)),
+    let radius = (style.socket_radius * zoom).max(2.0);
+    let ring = match state {
+        SocketState::Candidate => Some((
+            radius * 1.35,
+            Stroke::new((1.8 * zoom).max(1.5), style.socket_candidate_outline),
+        )),
+        SocketState::Hovered => Some((radius * 1.2, Stroke::new(zoom.max(1.0), Color32::WHITE))),
+        _ => None,
     };
-    painter.circle(center, radius, style.background, stroke);
+    if let Some((radius, stroke)) = ring {
+        painter.circle_stroke(center, radius, stroke);
+    }
 }
 
 /// State flags that change how a node's chrome is drawn.
