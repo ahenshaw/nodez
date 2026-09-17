@@ -7,7 +7,7 @@ Sockets are colour-coded and typed: the editor refuses a drag between
 incompatible sockets, and so does the API, so a graph on disk is always
 well-typed. You describe your nodes as Rust structs and the rest is generated.
 
-![The demo app: a node graph on the left, the config it generates on the right](docs/screenshot.png)
+![The demo app: a node graph on the left, the config it generates on the right](https://raw.githubusercontent.com/ahenshaw/nodez/main/docs/screenshot.png)
 
 ## Quickstart
 
@@ -115,7 +115,7 @@ fn run(graph: &Graph, library: &NodeLibrary, rules: &Rules<Urls>) -> String {
 cargo run -p nodez --features derive,app --example quickstart
 ```
 
-![The quickstart: five nodes building a URL](docs/quickstart.png)
+![The quickstart: five nodes building a URL](https://raw.githubusercontent.com/ahenshaw/nodez/main/docs/quickstart.png)
 
 ## What a field means
 
