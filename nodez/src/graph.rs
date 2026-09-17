@@ -225,6 +225,14 @@ pub struct Connection {
     pub from: SocketRef,
     /// The input socket the wire enters.
     pub to: SocketRef,
+    /// Where this link sits among those entering `to`.
+    ///
+    /// Only meaningful for a multi-input socket, where order is part of the
+    /// meaning: the parts of a joined string, the services in a stack. Stored
+    /// rather than inferred from creation order, so unplugging a link and
+    /// plugging it back does not move it to the end.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub order: u32,
 }
 
 /// Why a connection was refused.
@@ -523,14 +531,111 @@ impl<N: NodeData> Graph<N> {
             self.connections.retain(|_, c| c.to != to);
         }
 
+        let order = self.links_into(to.node, &to.socket).count() as u32;
+        Ok(self.insert_connection(from, to, order))
+    }
+
+    /// Wire an output to an input at a given position among that input's links.
+    ///
+    /// Links at or after `index` shift down. Out-of-range indices append.
+    pub fn connect_at(
+        &mut self,
+        library: &NodeLibrary,
+        from: impl Into<SocketRef>,
+        to: impl Into<SocketRef>,
+        index: u32,
+    ) -> Result<ConnectionId, ConnectError> {
+        let from = from.into();
+        let to = to.into();
+        self.can_connect(library, &from, &to)?;
+
+        let multi = self.is_multi(library, &to);
+        if !multi {
+            self.connections.retain(|_, c| c.to != to);
+            return Ok(self.insert_connection(from, to, 0));
+        }
+
+        let index = index.min(self.links_into(to.node, &to.socket).count() as u32);
+        for conn in self.connections.values_mut() {
+            if conn.to == to && conn.order >= index {
+                conn.order += 1;
+            }
+        }
+        Ok(self.insert_connection(from, to, index))
+    }
+
+    /// Move a link to a different position among its socket's links.
+    ///
+    /// Returns false if there is no such link. Other links close up or make
+    /// room around it.
+    pub fn reorder_link(&mut self, link: ConnectionId, index: u32) -> bool {
+        let Some(conn) = self.connections.get(&link) else {
+            return false;
+        };
+        let (to, from_index) = (conn.to.clone(), conn.order);
+        let last = self
+            .links_into(to.node, &to.socket)
+            .count()
+            .saturating_sub(1) as u32;
+        let index = index.min(last);
+        if index == from_index {
+            return true;
+        }
+
+        for conn in self.connections.values_mut() {
+            if conn.to != to || conn.id == link {
+                continue;
+            }
+            if from_index < index && (from_index + 1..=index).contains(&conn.order) {
+                conn.order -= 1;
+            } else if index < from_index && (index..from_index).contains(&conn.order) {
+                conn.order += 1;
+            }
+        }
+        if let Some(conn) = self.connections.get_mut(&link) {
+            conn.order = index;
+        }
+        true
+    }
+
+    fn insert_connection(&mut self, from: SocketRef, to: SocketRef, order: u32) -> ConnectionId {
         let id = ConnectionId(self.next_connection);
         self.next_connection += 1;
-        self.connections.insert(id, Connection { id, from, to });
-        Ok(id)
+        self.connections
+            .insert(id, Connection { id, from, to, order });
+        id
+    }
+
+    fn is_multi(&self, library: &NodeLibrary, socket: &SocketRef) -> bool {
+        self.nodes
+            .get(&socket.node)
+            .and_then(|n| library.get(n.template))
+            .and_then(|t| t.input_spec(&socket.socket))
+            .is_some_and(|s| s.multi)
+    }
+
+    /// Close up the gaps left in a socket's ordering after a link is removed.
+    fn compact_orders(&mut self, sockets: &[SocketRef]) {
+        for socket in sockets {
+            let mut links: Vec<(ConnectionId, u32)> = self
+                .connections
+                .values()
+                .filter(|c| &c.to == socket)
+                .map(|c| (c.id, c.order))
+                .collect();
+            links.sort_by_key(|(id, order)| (*order, *id));
+            for (position, (id, _)) in links.into_iter().enumerate() {
+                if let Some(conn) = self.connections.get_mut(&id) {
+                    conn.order = position as u32;
+                }
+            }
+        }
     }
 
     pub fn disconnect(&mut self, id: ConnectionId) -> Option<Connection> {
-        self.connections.remove(&id)
+        let removed = self.connections.remove(&id)?;
+        self.compact_orders(std::slice::from_ref(&removed.to));
+        Some(removed)
     }
 
     /// Remove every wire touching a socket, returning them.
@@ -541,9 +646,13 @@ impl<N: NodeData> Graph<N> {
             .filter(|c| &c.from == socket || &c.to == socket)
             .map(|c| c.id)
             .collect();
-        ids.into_iter()
+        let removed: Vec<Connection> = ids
+            .into_iter()
             .filter_map(|id| self.connections.remove(&id))
-            .collect()
+            .collect();
+        let touched: Vec<SocketRef> = removed.iter().map(|c| c.to.clone()).collect();
+        self.compact_orders(&touched);
+        removed
     }
 
     /// Remove every wire touching a node, returning them.
@@ -554,9 +663,13 @@ impl<N: NodeData> Graph<N> {
             .filter(|c| c.from.node == node || c.to.node == node)
             .map(|c| c.id)
             .collect();
-        ids.into_iter()
+        let removed: Vec<Connection> = ids
+            .into_iter()
             .filter_map(|id| self.connections.remove(&id))
-            .collect()
+            .collect();
+        let touched: Vec<SocketRef> = removed.iter().map(|c| c.to.clone()).collect();
+        self.compact_orders(&touched);
+        removed
     }
 
     // ---------------------------------------------------------- maintenance
@@ -611,6 +724,19 @@ impl<N: NodeData> Graph<N> {
             self.connections.remove(&id);
             repairs.removed_connections += 1;
         }
+
+        // Orders may have gaps or duplicates after a repair, or come from a
+        // file written before they were stored at all.
+        let sockets: Vec<SocketRef> = {
+            let mut seen: Vec<SocketRef> = Vec::new();
+            for conn in self.connections.values() {
+                if !seen.contains(&conn.to) {
+                    seen.push(conn.to.clone());
+                }
+            }
+            seen
+        };
+        self.compact_orders(&sockets);
 
         // Re-establish the draw order over exactly the surviving nodes.
         self.order.retain(|id| self.nodes.contains_key(id));
@@ -676,6 +802,7 @@ impl<N: NodeData> Graph<N> {
                     id,
                     from: SocketRef::new(from, conn.from.socket.clone()),
                     to: SocketRef::new(to, conn.to.socket.clone()),
+                    order: conn.order,
                 },
             );
         }

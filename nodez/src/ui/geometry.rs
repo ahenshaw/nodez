@@ -71,7 +71,7 @@ pub struct RowGeometry {
     pub linked: bool,
 }
 
-/// One laid-out socket.
+/// One laid-out socket, or one attachment point of a multi-input socket.
 #[derive(Clone, Debug)]
 pub struct SocketGeometry {
     pub kind: SocketKind,
@@ -82,6 +82,13 @@ pub struct SocketGeometry {
     /// Screen-space centre.
     pub center: Pos2,
     pub linked: bool,
+    /// Which attachment point this is, for a multi-input socket.
+    ///
+    /// A multi-input shows one slot per link plus a free one at the bottom, so
+    /// where a wire is dropped decides where it lands in the order.
+    pub slot: Option<u32>,
+    /// True for the empty slot at the end of a multi-input.
+    pub is_free_slot: bool,
 }
 
 /// A fully laid-out node, in screen space.
@@ -110,6 +117,20 @@ impl NodeGeometry {
             .find(|s| s.kind == kind && s.name == name)
     }
 
+    /// The attachment point a particular link uses, for a multi-input socket.
+    /// Falls back to the socket itself when it has no slots.
+    pub fn socket_slot(
+        &self,
+        kind: SocketKind,
+        name: &str,
+        slot: u32,
+    ) -> Option<&SocketGeometry> {
+        self.sockets
+            .iter()
+            .find(|s| s.kind == kind && s.name == name && s.slot == Some(slot))
+            .or_else(|| self.socket_named(kind, name))
+    }
+
     pub fn row(&self, kind: RowKind) -> Option<&RowGeometry> {
         self.rows.iter().find(|r| r.kind == kind)
     }
@@ -127,6 +148,8 @@ impl NodeGeometry {
 struct RowPlan {
     kind: RowKind,
     height: f32,
+    /// Attachment points, for a multi-input socket. One otherwise.
+    slots: u32,
 }
 
 fn row_plan<N: NodeData>(
@@ -145,6 +168,7 @@ fn row_plan<N: NodeData>(
         rows.push(RowPlan {
             kind: RowKind::Output(i),
             height: style.row_height,
+            slots: 1,
         });
     }
 
@@ -153,11 +177,22 @@ fn row_plan<N: NodeData>(
         rows.push(RowPlan {
             kind: RowKind::Param(i),
             height: lines * style.row_height + (lines - 1.0) * style.row_spacing,
+            slots: 1,
         });
     }
 
     for (i, socket) in template.inputs.iter().enumerate() {
         if socket.hidden {
+            continue;
+        }
+        // A multi-input is as tall as its links plus the free slot below them.
+        if socket.multi {
+            let slots = graph.links_into(node.id, &socket.name).count() as u32 + 1;
+            rows.push(RowPlan {
+                kind: RowKind::Input(i),
+                height: (slots as f32 * style.multi_slot_height).max(style.row_height),
+                slots,
+            });
             continue;
         }
         let linked = graph.is_input_linked(node.id, &socket.name);
@@ -169,6 +204,7 @@ fn row_plan<N: NodeData>(
         rows.push(RowPlan {
             kind: RowKind::Input(i),
             height: lines * style.row_height + (lines - 1.0) * style.row_spacing,
+            slots: 1,
         });
     }
 
@@ -269,20 +305,40 @@ pub(crate) fn node_geometry<N: NodeData>(
                     ty: socket.ty,
                     center: pos2(body.right(), socket_y),
                     linked,
+                    slot: None,
+                    is_free_slot: false,
                 });
                 linked
             }
             RowKind::Input(index) => {
                 let socket = &template.inputs[index];
                 let linked = graph.is_input_linked(node.id, &socket.name);
-                sockets.push(SocketGeometry {
-                    kind: SocketKind::Input,
-                    index,
-                    name: socket.name.clone(),
-                    ty: socket.ty,
-                    center: pos2(body.left(), socket_y),
-                    linked,
-                });
+                if row.slots > 1 || socket.multi {
+                    let step = viewport.scale(style.multi_slot_height);
+                    for slot in 0..row.slots {
+                        sockets.push(SocketGeometry {
+                            kind: SocketKind::Input,
+                            index,
+                            name: socket.name.clone(),
+                            ty: socket.ty,
+                            center: pos2(body.left(), y + step * (slot as f32 + 0.5)),
+                            linked: slot + 1 < row.slots,
+                            slot: Some(slot),
+                            is_free_slot: slot + 1 == row.slots,
+                        });
+                    }
+                } else {
+                    sockets.push(SocketGeometry {
+                        kind: SocketKind::Input,
+                        index,
+                        name: socket.name.clone(),
+                        ty: socket.ty,
+                        center: pos2(body.left(), socket_y),
+                        linked,
+                        slot: None,
+                        is_free_slot: false,
+                    });
+                }
                 linked
             }
             RowKind::Param(_) => false,
@@ -352,6 +408,8 @@ fn collapsed_geometry<N: NodeData>(
             ty: socket.ty,
             center: pos2(rect.left(), fan(visible_inputs.len(), slot)),
             linked: graph.is_input_linked(node.id, &socket.name),
+            slot: None,
+            is_free_slot: false,
         });
     }
     for (slot, (index, socket)) in visible_outputs.iter().enumerate() {
@@ -362,6 +420,8 @@ fn collapsed_geometry<N: NodeData>(
             ty: socket.ty,
             center: pos2(rect.right(), fan(visible_outputs.len(), slot)),
             linked: graph.is_output_linked(node.id, &socket.name),
+            slot: None,
+            is_free_slot: false,
         });
     }
 

@@ -203,6 +203,49 @@ pub(crate) fn paint_socket(
     }
 }
 
+/// The rail behind a multi-input socket's attachment points, so a column of
+/// slots reads as one socket rather than several.
+pub(crate) fn paint_multi_track(
+    painter: &Painter,
+    x: f32,
+    top: f32,
+    bottom: f32,
+    color: Color32,
+    style: &EditorStyle,
+    zoom: f32,
+) {
+    let half = (style.socket_radius * zoom).max(2.0) * 0.55;
+    let rect = Rect::from_min_max(pos2(x - half, top), pos2(x + half, bottom));
+    let radius = (half * 2.0).round().clamp(0.0, 255.0) as u8;
+    painter.rect_filled(
+        rect,
+        CornerRadius::same(radius),
+        lerp_color(style.node_fill, color, style.multi_slot_track),
+    );
+}
+
+/// The empty attachment point at the end of a multi-input: a hollow ring,
+/// saying "drop here to add one" without looking like a live connection.
+pub(crate) fn paint_free_slot(
+    painter: &Painter,
+    center: Pos2,
+    color: Color32,
+    style: &EditorStyle,
+    zoom: f32,
+    state: SocketState,
+) {
+    let radius = (style.socket_radius * zoom).max(2.0) * 0.72;
+    let (radius, stroke) = match state {
+        SocketState::Candidate => (
+            radius * 1.4,
+            Stroke::new((1.6 * zoom).max(1.5), style.socket_candidate_outline),
+        ),
+        SocketState::Rejected => (radius, Stroke::new(zoom.max(1.0), dim(color, 0.3))),
+        _ => (radius, Stroke::new(zoom.max(1.0), color)),
+    };
+    painter.circle(center, radius, style.background, stroke);
+}
+
 /// State flags that change how a node's chrome is drawn.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct NodeChromeState {

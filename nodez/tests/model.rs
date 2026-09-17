@@ -2,8 +2,8 @@
 
 use egui::{Color32, pos2};
 use nodez::{
-    ConnectError, Graph, LayoutOptions, NodeLibrary, NodeTemplate, SocketSpec, TemplateId, Value,
-    Widget,
+    ConnectError, Graph, LayoutOptions, NodeId, NodeLibrary, NodeTemplate, SocketSpec, TemplateId,
+    Value, Widget,
 };
 
 struct Fixture {
@@ -330,4 +330,102 @@ fn graphs_round_trip_through_json() {
     let c = restored.add_node(&f.library, f.text, pos2(0.0, 0.0));
     assert_ne!(c, a);
     assert_ne!(c, b);
+}
+
+#[test]
+fn multi_input_order_survives_a_rewire() {
+    let f = fixture();
+    let mut graph = Graph::new();
+    let join = graph.add_node(&f.library, f.join, pos2(200.0, 0.0));
+
+    let mut links = Vec::new();
+    for part in ["a", "b", "c"] {
+        let n = graph.add_node(&f.library, f.text, pos2(0.0, 0.0));
+        graph.node_mut(n).unwrap().set_input_value("value", part);
+        links.push(graph.connect(&f.library, (n, "out"), (join, "parts")).unwrap());
+    }
+    let order = |g: &Graph| -> Vec<String> {
+        g.links_into(join, "parts")
+            .filter_map(|c| g.node(c.from.node)?.input_value("value"))
+            .filter_map(|v| v.as_str().map(str::to_owned))
+            .collect()
+    };
+    assert_eq!(order(&graph), ["a", "b", "c"]);
+
+    // Unplug the middle link and plug it straight back in.
+    let middle = graph.connection(links[1]).unwrap().clone();
+    graph.disconnect(links[1]);
+    assert_eq!(order(&graph), ["a", "c"]);
+    graph
+        .connect_at(&f.library, middle.from.clone(), middle.to.clone(), 1)
+        .unwrap();
+    assert_eq!(order(&graph), ["a", "b", "c"]);
+}
+
+#[test]
+fn links_can_be_reordered() {
+    let f = fixture();
+    let mut graph = Graph::new();
+    let join = graph.add_node(&f.library, f.join, pos2(200.0, 0.0));
+
+    let mut links = Vec::new();
+    for part in ["a", "b", "c", "d"] {
+        let n = graph.add_node(&f.library, f.text, pos2(0.0, 0.0));
+        graph.node_mut(n).unwrap().set_input_value("value", part);
+        links.push(graph.connect(&f.library, (n, "out"), (join, "parts")).unwrap());
+    }
+    let order = |g: &Graph| -> Vec<String> {
+        g.links_into(join, "parts")
+            .filter_map(|c| g.node(c.from.node)?.input_value("value"))
+            .filter_map(|v| v.as_str().map(str::to_owned))
+            .collect()
+    };
+
+    assert!(graph.reorder_link(links[3], 0));
+    assert_eq!(order(&graph), ["d", "a", "b", "c"]);
+    assert!(graph.reorder_link(links[3], 2));
+    assert_eq!(order(&graph), ["a", "b", "d", "c"]);
+    // Past the end clamps rather than leaving a gap.
+    assert!(graph.reorder_link(links[0], 99));
+    assert_eq!(order(&graph), ["b", "d", "c", "a"]);
+    assert!(!graph.reorder_link(nodez::ConnectionId(999), 0));
+}
+
+#[test]
+fn removing_a_link_closes_the_gap() {
+    let f = fixture();
+    let mut graph = Graph::new();
+    let join = graph.add_node(&f.library, f.join, pos2(200.0, 0.0));
+    let mut links = Vec::new();
+    for _ in 0..3 {
+        let n = graph.add_node(&f.library, f.text, pos2(0.0, 0.0));
+        links.push(graph.connect(&f.library, (n, "out"), (join, "parts")).unwrap());
+    }
+    graph.disconnect(links[0]);
+    let orders: Vec<u32> = graph.links_into(join, "parts").map(|c| c.order).collect();
+    assert_eq!(orders, [0, 1]);
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn order_survives_a_save_and_load() {
+    let f = fixture();
+    let mut graph = Graph::new();
+    let join = graph.add_node(&f.library, f.join, pos2(0.0, 0.0));
+    let mut sources = Vec::new();
+    for part in ["a", "b", "c"] {
+        let n = graph.add_node(&f.library, f.text, pos2(0.0, 0.0));
+        graph.node_mut(n).unwrap().set_input_value("value", part);
+        graph.connect(&f.library, (n, "out"), (join, "parts")).unwrap();
+        sources.push(n);
+    }
+    let last = graph.links_into(join, "parts").last().unwrap().id;
+    graph.reorder_link(last, 0);
+
+    let restored: Graph = serde_json::from_str(&serde_json::to_string(&graph).unwrap()).unwrap();
+    let order: Vec<NodeId> = restored
+        .links_into(join, "parts")
+        .map(|c| c.from.node)
+        .collect();
+    assert_eq!(order, vec![sources[2], sources[0], sources[1]]);
 }

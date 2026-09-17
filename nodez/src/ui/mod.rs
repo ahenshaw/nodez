@@ -496,7 +496,7 @@ impl NodeEditor {
         for conn in graph.connections() {
             let (Some(from), Some(to)) = (
                 find_socket(geoms, &conn.from, SocketKind::Output),
-                find_socket(geoms, &conn.to, SocketKind::Input),
+                find_link_end(geoms, conn),
             ) else {
                 continue;
             };
@@ -764,6 +764,31 @@ impl NodeEditor {
             self.state.interaction = Interaction::Idle;
         }
 
+        // One rail per multi-input, behind its slots.
+        let mut rails: Vec<(usize, f32, f32, crate::types::DataTypeId)> = Vec::new();
+        for socket in geom.sockets.iter().filter(|s| s.slot.is_some()) {
+            match rails.iter_mut().find(|(index, ..)| *index == socket.index) {
+                Some((_, top, bottom, _)) => {
+                    *top = top.min(socket.center.y);
+                    *bottom = bottom.max(socket.center.y);
+                }
+                None => rails.push((socket.index, socket.center.y, socket.center.y, socket.ty)),
+            }
+        }
+        for (_, top, bottom, ty) in rails {
+            if bottom > top {
+                draw::paint_multi_track(
+                    painter,
+                    geom.body.left(),
+                    top,
+                    bottom,
+                    library.types.color(ty),
+                    &self.style,
+                    zoom,
+                );
+            }
+        }
+
         // Sockets are allocated before the body widgets so a widget wins in the
         // small region where their hit-boxes overlap.
         let mut changed = false;
@@ -775,11 +800,14 @@ impl NodeEditor {
                 socket.center + vec2(bias, 0.0),
                 Vec2::splat(radius * 2.0),
             );
+            // The slot is part of the id: a multi-input draws several
+            // attachment points that share a socket index.
             let salt = (
                 "socket",
                 geom.id,
                 socket.kind.is_output(),
                 socket.index,
+                socket.slot,
             );
             let socket_response = ui.interact(hit, base_id.with(salt), Sense::click_and_drag());
             if socket_response.hovered() {
@@ -796,15 +824,26 @@ impl NodeEditor {
             }
 
             let state = self.socket_state(graph, library, socket, geom.id, hovered_socket);
-            draw::paint_socket(
-                painter,
-                socket.center,
-                library.types.color(socket.ty),
-                library.types.shape(socket.ty),
-                &self.style,
-                zoom,
-                state,
-            );
+            if socket.is_free_slot {
+                draw::paint_free_slot(
+                    painter,
+                    socket.center,
+                    library.types.color(socket.ty),
+                    &self.style,
+                    zoom,
+                    state,
+                );
+            } else {
+                draw::paint_socket(
+                    painter,
+                    socket.center,
+                    library.types.color(socket.ty),
+                    library.types.shape(socket.ty),
+                    &self.style,
+                    zoom,
+                    state,
+                );
+            }
             if socket_response.hovered() {
                 let spec = if socket.kind.is_input() {
                     template.inputs.get(socket.index)
@@ -852,11 +891,16 @@ impl NodeEditor {
                     let Some(spec) = template.inputs.get(index) else {
                         continue;
                     };
-                    if row.linked || spec.widget == Widget::None {
+                    if row.linked || spec.multi || spec.widget == Widget::None {
+                        let y = if spec.multi {
+                            row.rect.top() + self.style.multi_slot_height * zoom * 0.5
+                        } else {
+                            row.rect.center().y
+                        };
                         draw::paint_clipped_text(
                             painter,
                             row.rect,
-                            pos2(row.rect.left(), row.rect.center().y),
+                            pos2(row.rect.left(), y),
                             Align2::LEFT_CENTER,
                             spec.display(),
                             label_font.clone(),
@@ -1039,6 +1083,7 @@ impl NodeEditor {
                             name: socket.name.clone(),
                             ty: socket.ty,
                             center: socket.center,
+                            slot: socket.slot,
                         },
                     ));
                 }
@@ -1060,7 +1105,7 @@ impl NodeEditor {
         for conn in graph.connections() {
             let (Some(from), Some(to)) = (
                 find_socket(geoms, &conn.from, SocketKind::Output),
-                find_socket(geoms, &conn.to, SocketKind::Input),
+                find_link_end(geoms, conn),
             ) else {
                 continue;
             };
@@ -1126,9 +1171,13 @@ impl NodeEditor {
     ) {
         // Dragging off a wired input picks the wire up rather than starting a
         // second one, matching Blender.
-        if socket.kind.is_input()
-            && let Some(conn) = graph.link_into(node, &socket.name)
-        {
+        let existing = socket.kind.is_input().then(|| match socket.slot {
+            Some(slot) => graph
+                .links_into(node, &socket.name)
+                .find(|c| c.order == slot),
+            None => graph.link_into(node, &socket.name),
+        });
+        if let Some(Some(conn)) = existing {
             let ty = graph
                 .node(conn.from.node)
                 .and_then(|n| library.get(n.template))
@@ -1220,6 +1269,7 @@ impl NodeEditor {
                 target_node: target.node,
                 target_socket: target.name.clone(),
                 target_is_output: target.kind.is_output(),
+                target_slot: target.slot,
             }),
             // Dropping in empty space opens the search menu, filtered to nodes
             // that can take the wire — Blender's link-drag search.
@@ -1340,7 +1390,7 @@ impl NodeEditor {
         for conn in graph.connections() {
             let (Some(from), Some(to)) = (
                 find_socket(geoms, &conn.from, SocketKind::Output),
-                find_socket(geoms, &conn.to, SocketKind::Input),
+                find_link_end(geoms, conn),
             ) else {
                 continue;
             };
@@ -1542,6 +1592,7 @@ impl NodeEditor {
                 target_node,
                 target_socket,
                 target_is_output,
+                target_slot,
             } => {
                 if anchor_is_output == target_is_output {
                     actions.push(EditorAction::ConnectionRejected(ConnectError::SelfLink));
@@ -1552,7 +1603,15 @@ impl NodeEditor {
                 } else {
                     (SocketRef::new(target_node, target_socket), anchor)
                 };
-                match graph.connect(library, from, to) {
+                let result = match target_slot {
+                    // Dropping on a particular slot says where in the order it
+                    // belongs, not merely that it belongs.
+                    Some(slot) if anchor_is_output => {
+                        graph.connect_at(library, from, to, slot)
+                    }
+                    _ => graph.connect(library, from, to),
+                };
+                match result {
                     Ok(id) => {
                         actions.push(EditorAction::Connected(id));
                         true
@@ -1773,6 +1832,8 @@ struct HoveredSocket {
     name: String,
     ty: DataTypeId,
     center: Pos2,
+    /// Which attachment point of a multi-input, if any.
+    slot: Option<u32>,
 }
 
 /// Structural edits are queued during drawing and applied at the end of the
@@ -1790,6 +1851,8 @@ enum Op {
         target_node: NodeId,
         target_socket: String,
         target_is_output: bool,
+        /// Which attachment point of a multi-input the wire was dropped on.
+        target_slot: Option<u32>,
     },
     Disconnect(ConnectionId),
     DisconnectSocket(SocketRef),
@@ -1833,6 +1896,17 @@ fn find_socket<'a>(
         .iter()
         .find(|g| g.id == socket.node)?
         .socket_named(kind, &socket.socket)
+}
+
+/// Where a particular link meets its input socket.
+fn find_link_end<'a>(
+    geoms: &'a [geometry::NodeGeometry],
+    conn: &Connection,
+) -> Option<&'a geometry::SocketGeometry> {
+    geoms
+        .iter()
+        .find(|g| g.id == conn.to.node)?
+        .socket_slot(SocketKind::Input, &conn.to.socket, conn.order)
 }
 
 /// Whether the cut stroke crosses a wire.

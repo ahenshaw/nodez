@@ -72,14 +72,16 @@ impl<N: NodeData> Graph<N> {
         self.connections().filter(move |c| c.from.node == node)
     }
 
-    /// Every wire arriving at one input socket.
-    pub fn links_into<'a>(
-        &'a self,
-        node: NodeId,
-        socket: &'a str,
-    ) -> impl Iterator<Item = &'a Connection> {
-        self.connections()
-            .filter(move |c| c.to.node == node && c.to.socket == socket)
+    /// Every wire arriving at one input socket, in the socket's own order.
+    ///
+    /// For a multi-input that order is the user's: see [`Connection::order`].
+    pub fn links_into(&self, node: NodeId, socket: &str) -> impl Iterator<Item = &Connection> {
+        let mut links: Vec<&Connection> = self
+            .connections()
+            .filter(|c| c.to.node == node && c.to.socket == socket)
+            .collect();
+        links.sort_by_key(|c| (c.order, c.id.0));
+        links.into_iter()
     }
 
     /// Every wire leaving one output socket.
@@ -121,10 +123,7 @@ impl<N: NodeData> Graph<N> {
         node: NodeId,
         socket: &str,
     ) -> InputSource<'a> {
-        let links: Vec<_> = self
-            .connections()
-            .filter(|c| c.to.node == node && c.to.socket == socket)
-            .collect();
+        let links: Vec<_> = self.links_into(node, socket).collect();
         if !links.is_empty() {
             return InputSource::Linked(links);
         }
@@ -592,10 +591,8 @@ impl<'a, T, N: NodeData> EvalContext<'a, T, N> {
 
     /// Every upstream result arriving at an input socket, in connection order.
     pub fn inputs(&self, socket: &str) -> Vec<Linked<'a, T>> {
-        let node_id = self.node.id;
         self.graph
-            .connections()
-            .filter(|c| c.to.node == node_id && c.to.socket == socket)
+            .links_into(self.node.id, socket)
             .filter_map(|conn| {
                 self.results.get(&conn.from.node).map(|value| Linked {
                     value,
