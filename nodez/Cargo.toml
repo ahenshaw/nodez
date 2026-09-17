@@ -31,3 +31,11 @@ eframe = { workspace = true }
 [[example]]
 name = "typed_nodes"
 required-features = ["derive"]
+
+[[example]]
+name = "quickstart"
+required-features = ["derive", "app"]
+
+[[example]]
+name = "readme_check"
+required-features = ["derive", "app"]

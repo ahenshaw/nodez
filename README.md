@@ -1,127 +1,191 @@
 # nodez
 
-A Blender-style node editor for [egui](https://github.com/emilk/egui), plus the
-typed graph model behind it.
+A Blender-style node editor for [egui](https://github.com/emilk/egui), with a
+typed graph you can walk.
 
 Sockets are colour-coded and typed: the editor refuses a drag between
-incompatible sockets, and so does `Graph::connect` in code, so a graph on disk
-is always well-typed. The traversal API turns that graph into whatever your
-domain needs — the bundled demo turns it into a container-stack config file.
+incompatible sockets, and so does the API, so a graph on disk is always
+well-typed. You describe your nodes as Rust structs and the rest is generated.
 
 ![The demo app: a node graph on the left, the config it generates on the right](docs/screenshot.png)
 
-## Layout
+## Quickstart
 
-| Crate | What it is |
+```toml
+[dependencies]
+nodez = { version = "0.1", features = ["derive", "app"] }
+```
+
+Four kinds of node that build URLs. This is a whole program:
+
+```rust
+use nodez::app::{EditorApp, Preview};
+use nodez::{Evaluate, Fold, Graph, Multi, NodeError, NodeLibrary, NodeType, Payload, Rules,
+            SocketType};
+
+// 1. Values that travel along wires. String, i64, f64 and bool already are
+//    wire types; anything else you declare. The colour comes from the name.
+#[derive(Clone, Debug, SocketType)]
+struct Url(String);
+
+// 2. Kinds of node. A field with #[input] is a socket, a bare field is a
+//    parameter drawn in the body, and the field's type does the rest.
+#[derive(Debug, NodeType)]
+#[node(category = "Input", output = String)]
+struct Text {
+    #[input(hint = "text…")]
+    value: String,
+}
+
+#[derive(Debug, NodeType)]
+#[node(category = "Build", output = String, label = "Join Path")]
+struct Join {
+    #[param(default = "/")]
+    separator: String,
+    #[input]
+    parts: Multi<String>,          // Multi: accepts any number of links
+}
+
+#[derive(Debug, NodeType)]
+#[node(category = "Build", output = Url)]
+struct Address {
+    #[input(default = "example.com")]
+    host: String,
+    #[input(default = 443, min = 1, max = 65535)]
+    port: i64,                     // i64 is editable, so it gets a drag box
+    #[input]
+    path: String,
+}
+
+#[derive(Debug, NodeType)]
+#[node(category = "Output", produces = String)]
+struct Collect {
+    #[input]
+    urls: Multi<Url>,              // Url has no editor, so this is link-only
+}
+
+// 3. What each kind does.
+struct Build;
+impl Fold for Build {}
+
+impl Evaluate<Build> for Text {
+    fn evaluate(&self) -> Result<String, NodeError> { Ok(self.value.clone()) }
+}
+impl Evaluate<Build> for Join {
+    fn evaluate(&self) -> Result<String, NodeError> {
+        Ok(self.parts.iter().cloned().collect::<Vec<_>>().join(&self.separator))
+    }
+}
+impl Evaluate<Build> for Address {
+    fn evaluate(&self) -> Result<Url, NodeError> {
+        let scheme = if self.port == 443 { "https" } else { "http" };
+        Ok(Url(format!("{scheme}://{}:{}/{}", self.host, self.port, self.path)))
+    }
+}
+impl Evaluate<Build> for Collect {
+    fn evaluate(&self) -> Result<String, NodeError> {
+        Ok(self.urls.iter().map(|u| u.0.as_str()).collect::<Vec<_>>().join("\n"))
+    }
+}
+
+// 4. A window.
+fn main() -> eframe::Result {
+    let mut library = NodeLibrary::new();
+    let mut rules = Rules::<Build>::new();
+    rules.register_all::<(Text, Join, Address, Collect)>(&mut library);
+
+    EditorApp::new(library)
+        .title("nodez quickstart")
+        .preview(move |graph, library| Preview::text(run(graph, library, &rules)))
+        .run()
+}
+
+fn run(graph: &Graph, library: &NodeLibrary, rules: &Rules<Build>) -> String {
+    let Some(target) = graph.nodes_of_template(library.id("collect").unwrap()).next()
+    else { return "add a Collect node".to_owned() };
+    match graph.evaluate::<Payload, NodeError>(library, target.id, |ctx| rules.run(&ctx)) {
+        Ok(payload) => *payload.downcast::<String>().unwrap_or_default(),
+        Err(e) => e.to_string(),
+    }
+}
+```
+
+```
+cargo run -p nodez --features derive,app --example quickstart
+```
+
+![The quickstart: five nodes building a URL](docs/quickstart.png)
+
+## What a field means
+
+| you write | you get |
 |---|---|
-| [`nodez/`](nodez) | The library: graph model, traversal, and the egui editor widget |
-| [`nodez-demo/`](nodez-demo) | A visual generator for container-stack config files |
-| [`nodez-derive/`](nodez-derive) | Derive macros describing nodes as Rust types |
+| `#[input] x: T` | a socket that must be wired |
+| `#[input] x: Option<T>` | a socket that may be wired |
+| `#[input] x: Multi<T>` | a socket accepting any number of links |
+| `x: T` (no attribute) | a parameter, drawn in the body, never wired |
 
-```
-cargo run                  # the demo app
-cargo run -- --print       # generate the sample config headlessly
-cargo test                 # model, emitter and doc tests
+A wire type that offers an inline editor — `String`, `i64`, `f64`, `bool`, or
+anything with `#[socket(widget = …)]` — makes a socket you can also type into.
+One that doesn't is link-only.
 
-cargo run -p nodez --features derive --example typed_nodes           # the prototype
-cargo run -p nodez --features derive --example typed_nodes -- --edit # …in the editor
-```
+`#[input]` takes `default`, `label`, `hint`, `description`, `min` and `max`.
+`#[node]` takes `id`, `label`, `category`, `description`, `keywords`, `width`,
+`output`, `produces` and `header_color`, and all of them have defaults — `id`
+and `label` come from the struct name.
 
-## The two halves
+## Controls
 
-The crate splits cleanly in two, and the model half never needs the editor
-running — the same graph can be loaded and rendered from a build script or a
-CLI.
+| | |
+|---|---|
+| `LMB` | select; drag on empty canvas to box-select |
+| `Shift`+`LMB` | add to the selection |
+| `MMB` drag, trackpad scroll | pan |
+| Wheel, `Ctrl`+scroll, pinch | zoom about the cursor |
+| `Shift`+`A` | add-node search |
+| Drag a wire into empty space | add-node search, filtered to what can take it |
+| Drag off a wired input | pick the wire up and move it |
+| `Ctrl`+drag, double-click a wire | cut wires |
+| `G` | grab: the selection follows the pointer, `Esc` cancels |
+| `Shift`+`D` | duplicate, keeping the wires between the copies |
+| `X` / `Del` | delete the selection |
+| `H` / `M` | collapse / mute |
+| `A` / `Alt`+`A` | select all / none |
+| `Home` / `.` | frame everything / the selection |
+| Double-click a header | rename |
+| `RMB` on a node | context menu |
 
-### The model
+## Reading a graph
 
-`NodeLibrary` is the schema for your domain: the socket types, their colours,
-and the node templates. `Graph` holds an instance of it.
-
-```rust
-use nodez::{Graph, NodeLibrary, NodeTemplate, SocketSpec, Widget};
-use egui::Color32;
-
-let mut library = NodeLibrary::new();
-let text   = library.types.add("Text",   Color32::from_rgb(0x70, 0xB2, 0xFF));
-let number = library.types.add("Number", Color32::from_rgb(0xA1, 0xA1, 0xA1));
-
-// A Number may be dropped into a Text socket. The reverse is refused.
-library.types.allow_cast(number, text);
-
-let join = library.register(
-    NodeTemplate::new("join", "Join Text")
-        .category("Convert")
-        .input(SocketSpec::new("parts", text).multi())   // accepts a fan-in
-        .param(nodez::ParamSpec::new("separator", Widget::text()))
-        .output(SocketSpec::new("out", text)),
-);
-```
-
-`Graph` enforces its own invariants on every edit — types must be compatible,
-single-link inputs hold at most one wire, and no edit may introduce a cycle — so
-traversal code can rely on the graph being a DAG without re-checking.
-
-```rust
-graph.connect(&library, (a, "out"), (b, "parts"))?;      // Ok
-graph.connect(&library, (b, "out"), (a, "parts"))        // Err(WouldCycle)
-```
-
-### Traversal
-
-Iterators and folds for walking the graph, all on `Graph`:
+`Graph` is a DAG, and everything below is on it.
 
 | | |
 |---|---|
 | `nodes()`, `connections()`, `nodes_of_template()` | contents |
 | `incoming()`, `outgoing()`, `links_into()`, `links_from()` | wires at a node or socket |
-| `predecessors()`, `successors()`, `neighbors()` | immediate neighbours |
-| `ancestors()`, `descendants()`, `walk()` | transitive walks, as `Iterator`s |
+| `predecessors()`, `successors()` | immediate neighbours |
+| `ancestors()`, `descendants()`, `walk()` | transitive walks, as iterators |
 | `roots()`, `sinks()`, `isolated()` | ends of the graph |
-| `topological_order()`, `iter_topological()`, `dependency_order()` | evaluation order |
-| `components()`, `component_of()`, `depths()`, `find_cycle()` | shape |
-| `input_source()`, `source_of()`, `param()` | resolving one input |
-| `evaluate()`, `evaluate_all()`, `for_each_topological()` | folds |
+| `topological_order()`, `dependency_order()` | evaluation order |
+| `components()`, `depths()`, `find_cycle()` | shape |
+| `evaluate()`, `evaluate_all()` | folds |
 
-`Value::map()` builds the ordered maps most config formats want, skipping
-entries that would be empty — which is most of what assembling a document by
-hand costs:
+`evaluate` visits only what the target depends on; `evaluate_all` visits
+everything. Both hand each node the results of everything upstream.
 
 ```rust
-let body = Value::map()
-    .set("image", image)
-    .set_if(replicas > 1, "deploy", Value::map().set("replicas", replicas))
-    .set_list("ports", ports)          // key dropped when the list is empty
-    .set_some("healthcheck", probe);   // key dropped when there is no probe
+graph.connect(&library, (a, "out"), (b, "parts"))?;      // Ok
+graph.connect(&library, (b, "out"), (a, "parts"))        // Err(WouldCycle)
+graph.can_connect(&library, &from, &to)                   // Err: "Text cannot drive Int"
 ```
 
-`evaluate` is the one that turns a graph into a config file. It calls your
-closure once per node, in dependency order, handing it the results of everything
-upstream:
+Graphs serialise with serde, and `Graph::validate` repairs one loaded against a
+library that has since changed. `nodez::layered` arranges a graph built in code.
 
-```rust
-let yaml = graph.evaluate::<Fragment, String>(&library, stack_node, |ctx| {
-    match ctx.template().id.as_str() {
-        "text" => Ok(Fragment::Text(ctx.literal_str("value").unwrap_or_default().into())),
-        "join" => {
-            let separator = ctx.param_str("separator").unwrap_or(" ");
-            let parts: Vec<_> = ctx.inputs("parts").iter().filter_map(|l| l.value.text()).collect();
-            Ok(Fragment::Text(parts.join(separator)))
-        }
-        other => Err(format!("no rule for `{other}`")),
-    }
-})?;
-```
+## Just the widget
 
-`ctx.inputs(socket)` gives the upstream results in connection order;
-`ctx.literal(socket)` and `ctx.param(name)` give the values the user typed into
-the node. `evaluate` visits only what the target depends on;
-`evaluate_all` visits everything.
-
-Graphs built in code can be arranged with `nodez::layered`, which places nodes in
-columns by dependency depth and sweeps to reduce crossings.
-
-### The editor
+`EditorApp` is a window; `NodeEditor` is the canvas alone, for dropping into an
+app you already have.
 
 ```rust
 let response = self.editor.show(ui, &self.library, &mut self.graph);
@@ -130,139 +194,31 @@ if response.changed {
 }
 ```
 
-`EditorResponse::actions` reports what happened — `NodeAdded`, `Connected`,
-`InputChanged`, `ConnectionRejected(..)` and so on — so the host app can react
-without diffing the graph. `NodeEditor::state` holds pan, zoom and selection,
-and is public so the app can drive the view.
-
-Everything visual lives in `EditorStyle`, which defaults to Blender's dark
-theme. `EditorStyle::light()` is the other preset.
-
-## Controls
-
-| | |
-|---|---|
-| `LMB` | select; drag on empty canvas to box-select |
-| `Shift`+`LMB` | add to the selection |
-| `MMB` drag | pan |
-| Trackpad two-finger scroll | pan |
-| Wheel | zoom about the cursor |
-| `NodeEditor::scroll_mode` | force a bare scroll to always pan or always zoom |
-| `Ctrl`/`Cmd`+scroll, pinch | zoom about the cursor |
-| `Shift`/`Alt`+wheel | pan horizontally / vertically |
-| `Shift`+`A` | add-node search |
-| Drag a wire into empty space | add-node search, filtered to what can take that wire |
-| Drag off a wired input | pick the wire up and move it |
-| `Ctrl`+drag | cut every wire the stroke crosses |
-| Double-click a wire | cut it |
-| `G` | grab: the selection follows the pointer until a click confirms, `Esc` cancels |
-| `Shift`+`D` | duplicate, keeping the wires between the copies |
-| `X` / `Del` | delete the selection |
-| `H` | collapse / expand |
-| `M` | mute (kept in the graph, excluded from the config) |
-| `A` / `Alt`+`A` | select all / none |
-| `Home` / `.` | frame everything / the selection |
-| Double-click a header | rename |
-| Drag a node's right edge | resize |
-| `RMB` on a node | context menu |
+`response.actions` reports what happened — `NodeAdded`, `Connected`,
+`InputChanged`, `ConnectionRejected(..)` — and `editor.state` holds pan, zoom
+and selection. `EditorStyle` holds every colour and metric, defaulting to
+Blender's dark theme; `EditorStyle::light()` is the other preset.
 
 ## The demo
 
-`nodez-demo` describes a container stack as a graph and emits a compose-style
-YAML document from it. It shows the pieces working together:
+[`nodez-demo`](nodez-demo) is the app in the first screenshot: fourteen node
+kinds that generate a container-stack config file.
 
-- **[`domain.rs`](nodez-demo/src/domain.rs)** — the socket types, their colours
-  and casts, and the fourteen node templates. This is the file you would replace
-  for your own format.
-- **[`generate.rs`](nodez-demo/src/generate.rs)** — `evaluate` folding each node
-  into a `Fragment` and the stack node assembling the document. It also uses
-  `ancestors()` to report which nodes are not wired to the output.
-- **[`yaml.rs`](nodez-demo/src/yaml.rs)** — an emitter over `nodez::Value`, which
-  is an ordered document tree, so generated keys keep the order the templates
-  declare.
-- **[`sample.rs`](nodez-demo/src/sample.rs)** — the starting graph, built entirely
-  in code and placed by `nodez::layered`.
-
-The left panel's inspector shows the traversal API live: the active node's direct
-and transitive dependencies and dependents, and the whole graph's evaluation
-order with unreachable nodes dimmed.
-
-Save / Load round-trip the graph as JSON (serde, on by default). A graph saved
-against an older library is repaired on load by `Graph::validate`, which drops
-nodes whose template is gone and wires that no longer typecheck, and fills in
-values for sockets that have since been added.
-
-## The editor window
-
-`NodeEditor` is just the canvas. The `app` feature adds the surroundings every
-app built on it would otherwise rewrite — a toolbar, a node palette grouped by
-category, a graph inspector, a preview panel and a status bar listing the
-keybindings:
-
-```rust
-nodez::app::EditorApp::new(library)
-    .graph(graph)
-    .title("stack config editor")
-    .file("stack-graph.json")
-    .json_files()
-    .preview(|graph, library| Preview::text(generate(graph, library)))
-    .run()
+```
+cargo run                  # the editor
+cargo run -- --print       # generate the sample config headlessly
 ```
 
-That is what [`nodez-demo`](nodez-demo/src/main.rs) does; its `main.rs` is 49
-lines, of which the editor window is seven. `EditorApp::ui` draws the same thing
-inside a `Ui` you already have, for embedding it in something larger.
+[`nodes.rs`](nodez-demo/src/nodes.rs) is the whole domain — wire types, node
+kinds, and what each one emits.
 
-## Nodes as Rust types
+## Crates
 
-Behind the `derive` feature, the schema and the evaluation rules come from Rust
-types instead of runtime builders. This is how
-[`nodez-demo`](nodez-demo/src/nodes.rs) describes its fourteen node kinds. A field *is* a socket, its type gives the socket type, and
-its outer wrapper gives the arity:
-
-```rust
-#[derive(NodeType)]
-#[node(output = ServiceDef)]
-struct Service {
-    name: String,                        // no #[input]: a parameter
-    #[input] image: ImageRef,            // no widget on ImageRef, so link-only
-    #[input] replicas: i64,              // i64 is editable, so it gets a drag box
-    #[input] env: Multi<EnvList>,        // Multi: a fan-in
-    #[input] health: Option<Health>,     // Option: nothing wired is None
-}
-
-impl Evaluate<Config> for Service { .. }   // a fold, so a graph can have several
-```
-
-`Evaluate` does not restate the output type: it is pinned to the output socket
-the schema declares, since that is what downstream nodes downcast to.
-
-`Rules` registers schemas and rules together, so there is no match on template
-ids and no socket name written twice. A whole library goes in at once, naming
-the kinds as a tuple:
-
-```rust
-type Nodes = (Image, Port, EnvVar, EnvFile, Service);
-
-let mut rules = Rules::<Config>::new();
-rules.register_all::<Nodes>(&mut library);
-``` Primitive
-types are socket types already, so only types carrying real domain meaning need
-declaring.
-
-Colours are derived and need never be chosen: a socket type's from its name, a
-node header's from its category — or from the node's own id when it has no
-category, so nodes stay distinguishable either way. Both are stable for the life
-of the project, and either can be overridden. The demo overrides neither.
-
-`Graph<N>` also prototypes typed storage: `Graph<DynNode>` (the default) keeps
-maps of `Value`, while a domain can store its own enum instead. The example
-builds the same graph both ways and gets identical output.
-
-[`nodez-demo/src/nodes.rs`](nodez-demo/src/nodes.rs) is the worked example;
-[`nodez/examples/typed_nodes.rs`](nodez/examples/typed_nodes.rs) is a smaller
-one that also demonstrates typed storage. The dynamic API is unchanged and still
-what `Graph` uses by default.
+| | |
+|---|---|
+| [`nodez/`](nodez) | the library: graph, traversal, editor widget, `app` window |
+| [`nodez-derive/`](nodez-derive) | the derive macros |
+| [`nodez-demo/`](nodez-demo) | the config-generator app |
 
 ## License
 
