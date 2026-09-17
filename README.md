@@ -140,6 +140,45 @@ One that doesn't is link-only.
 `output`, `produces` and `header_color`, and all of them have defaults — `id`
 and `label` come from the struct name.
 
+## What a fold is
+
+`Fold` names one way of walking the graph. It is a marker type holding nothing:
+
+```rust
+struct Urls;
+impl Fold for Urls {}
+```
+
+It exists so a node kind can be evaluated more than one way without having to
+pick one — the real thing and a redacted preview, say. `Rules<F>` holds the
+rules for one fold, and you can build several over the same library:
+
+```rust
+impl Evaluate<Urls>    for Address { .. }
+impl Evaluate<Preview> for Address { .. }
+```
+
+A fold varies *how* each node computes, not what it produces: every node still
+yields whatever its output socket declares, because that is what the nodes
+downstream read back. If you only ever walk the graph one way — and most
+projects do — one marker type is all you will write, and it costs two lines.
+
+## What a category is
+
+`category` is a string you invent. It does three things, all cosmetic:
+
+- groups nodes under a heading in the `Shift+A` menu and in the palette
+- gives every node in it the same header tint
+- is matched by the add-menu search, so typing `build` finds the whole group
+
+Nothing in the library knows the names. `Input`, `Build` and `Output` in the
+quickstart are only what that example chose, and they are unrelated to the fold
+marker beside them. Categories appear in the menu in the order you register
+them, and exist as soon as a node names one.
+
+A node naming no category lands in `Misc` and takes a header colour derived from
+its own id, so uncategorised nodes stay distinguishable from each other.
+
 ## Controls
 
 | | |
