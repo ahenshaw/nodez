@@ -502,17 +502,67 @@ pub(crate) fn wire_control_points(
     style: &EditorStyle,
     zoom: f32,
 ) -> [Pos2; 4] {
-    let dx = (to.x - from.x).abs();
-    let dy = (to.y - from.y).abs();
-    let pull = (dx * style.wire_curvature)
-        .max(viewport_scaled(style.wire_min_curve, zoom) + dy * 0.15)
-        .min(viewport_scaled(style.wire_max_curve, zoom));
+    let pull = segment_pull(from, to, style, zoom);
     [
         from,
         pos2(from.x + pull, from.y),
         pos2(to.x - pull, to.y),
         to,
     ]
+}
+
+/// How far a segment's control points reach out from its ends.
+fn segment_pull(from: Pos2, to: Pos2, style: &EditorStyle, zoom: f32) -> f32 {
+    let dx = (to.x - from.x).abs();
+    let dy = (to.y - from.y).abs();
+    (dx * style.wire_curvature)
+        .max(viewport_scaled(style.wire_min_curve, zoom) + dy * 0.15)
+        .min(viewport_scaled(style.wire_max_curve, zoom))
+}
+
+/// The cubic segments a wire is drawn from: one when it runs straight to its
+/// socket, one per span when it bends through waypoints.
+///
+/// The curve leaves and enters its sockets horizontally, as an unrouted wire
+/// does, and at each waypoint it follows the run of the wire through it, so
+/// the joins do not show.
+pub(crate) fn wire_path(
+    from: Pos2,
+    to: Pos2,
+    waypoints: &[Pos2],
+    style: &EditorStyle,
+    zoom: f32,
+) -> Vec<[Pos2; 4]> {
+    if waypoints.is_empty() {
+        return vec![wire_control_points(from, to, style, zoom)];
+    }
+
+    let mut points = Vec::with_capacity(waypoints.len() + 2);
+    points.push(from);
+    points.extend_from_slice(waypoints);
+    points.push(to);
+
+    let tangent = |i: usize| -> Vec2 {
+        if i == 0 || i + 1 == points.len() {
+            return vec2(1.0, 0.0);
+        }
+        let run = points[i + 1] - points[i - 1];
+        if run.length_sq() < 1.0 {
+            vec2(1.0, 0.0)
+        } else {
+            run.normalized()
+        }
+    };
+
+    (0..points.len() - 1)
+        .map(|i| {
+            let (a, b) = (points[i], points[i + 1]);
+            // Short spans get a proportionally shorter reach, or the control
+            // points overshoot each other and the wire ties a knot.
+            let pull = segment_pull(a, b, style, zoom).min((b - a).length() * 0.5);
+            [a, a + tangent(i) * pull, b - tangent(i + 1) * pull, b]
+        })
+        .collect()
 }
 
 fn viewport_scaled(len: f32, zoom: f32) -> f32 {

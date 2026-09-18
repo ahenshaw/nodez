@@ -372,13 +372,13 @@ impl NodeEditor {
         let pointer = ui.input(|i| i.pointer.hover_pos());
         let hovered_socket = pointer.and_then(|p| self.socket_at(&geoms, p, zoom));
         let hovered_wire = match (&pointer, &hovered_socket, &self.state.interaction) {
-            (Some(p), None, Interaction::Idle) => self.wire_at(graph, &geoms, *p, zoom),
+            (Some(p), None, Interaction::Idle) => self.wire_at(graph, &geoms, *p, &viewport),
             _ => None,
         };
 
         let mut ops: Vec<Op> = Vec::new();
 
-        self.paint_wires(&painter, graph, library, &geoms, zoom, hovered_wire);
+        self.paint_wires(&painter, graph, library, &geoms, &viewport, hovered_wire);
 
         // Node bodies, their widgets and their sockets.
         let original_style = ui.style().clone();
@@ -521,9 +521,10 @@ impl NodeEditor {
         graph: &Graph<N>,
         library: &NodeLibrary,
         geoms: &[geometry::NodeGeometry],
-        zoom: f32,
+        viewport: &Viewport,
         hovered_wire: Option<ConnectionId>,
     ) {
+        let zoom = viewport.zoom;
         for conn in graph.connections() {
             let (Some(from), Some(to)) = (
                 find_socket(geoms, &conn.from, SocketKind::Output),
@@ -532,10 +533,12 @@ impl NodeEditor {
                 continue;
             };
             let highlighted = hovered_wire == Some(conn.id);
+            let waypoints = screen_waypoints(conn, viewport);
             draw::paint_wire(
                 painter,
                 from.center,
                 to.center,
+                &waypoints,
                 library.types.color(from.ty),
                 library.types.color(to.ty),
                 &self.style,
@@ -601,7 +604,7 @@ impl NodeEditor {
                 } else {
                     (target_color, anchor_color)
                 };
-                draw::paint_wire(painter, a, b, ca, cb, &self.style, viewport.zoom, false);
+                draw::paint_wire(painter, a, b, &[], ca, cb, &self.style, viewport.zoom, false);
             }
             Interaction::BoxSelect { start, .. } => {
                 let Some(cursor) = painter
@@ -1226,8 +1229,9 @@ impl NodeEditor {
         graph: &Graph<N>,
         geoms: &[geometry::NodeGeometry],
         pointer: Pos2,
-        zoom: f32,
+        viewport: &Viewport,
     ) -> Option<ConnectionId> {
+        let zoom = viewport.zoom;
         let threshold = (self.style.wire_width * zoom).max(2.0) + 3.0;
         let mut best: Option<(f32, ConnectionId)> = None;
         for conn in graph.connections() {
@@ -1237,9 +1241,17 @@ impl NodeEditor {
             ) else {
                 continue;
             };
-            let points =
-                geometry::wire_control_points(from.center, to.center, &self.style, zoom);
-            let distance = geometry::distance_to_bezier(&points, pointer, 32);
+            let path = geometry::wire_path(
+                from.center,
+                to.center,
+                &screen_waypoints(conn, viewport),
+                &self.style,
+                zoom,
+            );
+            let distance = path
+                .iter()
+                .map(|points| geometry::distance_to_bezier(points, pointer, 32))
+                .fold(f32::INFINITY, f32::min);
             if distance <= threshold && best.as_ref().is_none_or(|(d, _)| distance < *d) {
                 best = Some((distance, conn.id));
             }
@@ -1522,13 +1534,17 @@ impl NodeEditor {
             ) else {
                 continue;
             };
-            let points = geometry::wire_control_points(
+            let path = geometry::wire_path(
                 from.center,
                 to.center,
+                &screen_waypoints(conn, viewport),
                 &self.style,
                 viewport.zoom,
             );
-            if cut_crosses_bezier(&points, start, end) {
+            if path
+                .iter()
+                .any(|points| cut_crosses_bezier(points, start, end))
+            {
                 ops.push(Op::Disconnect(conn.id));
             }
         }
@@ -2080,6 +2096,14 @@ fn is_trackpad(unit: egui::MouseWheelUnit, delta: Vec2, phase: egui::TouchPhase)
                 || delta.y.fract() != 0.0
         }
     }
+}
+
+/// A connection's bends in screen space, ready to hand to the painter.
+fn screen_waypoints(conn: &Connection, viewport: &Viewport) -> Vec<Pos2> {
+    conn.waypoints
+        .iter()
+        .map(|p| viewport.to_screen(*p))
+        .collect()
 }
 
 fn find_socket<'a>(

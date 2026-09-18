@@ -419,6 +419,133 @@ fn aligning_fewer_than_two_nodes_does_nothing() {
     assert_eq!(graph.node(ids[0]).unwrap().position, before);
 }
 
+/// A chain a -> b -> c -> d, plus a wire from a straight to d that has to get
+/// past the two columns in between.
+fn spanning() -> (Fixture, Graph, Vec<nodez::NodeId>) {
+    let f = fixture();
+    let mut graph = Graph::new();
+    let a = graph.add_node(&f.library, f.text, pos2(0.0, 0.0));
+    let b = graph.add_node(&f.library, f.join, pos2(0.0, 0.0));
+    let c = graph.add_node(&f.library, f.join, pos2(0.0, 0.0));
+    let d = graph.add_node(&f.library, f.join, pos2(0.0, 0.0));
+    for (from, to) in [(a, b), (b, c), (c, d)] {
+        graph.connect(&f.library, (from, "out"), (to, "parts")).unwrap();
+    }
+    graph.connect(&f.library, (a, "out"), (d, "parts")).unwrap();
+    let size = |_: &Graph, _: &nodez::Node| egui::vec2(120.0, 60.0);
+    nodez::layered(&mut graph, &LayoutOptions::default(), size).unwrap();
+    (f, graph, vec![a, b, c, d])
+}
+
+#[test]
+fn routing_bends_only_the_wires_that_span_columns() {
+    let (_f, mut graph, ids) = spanning();
+    let size = |_: &Graph, _: &nodez::Node| egui::vec2(120.0, 60.0);
+    nodez::route_links(&mut graph, &nodez::RouteOptions::default(), size).unwrap();
+
+    // Neighbor-to-neighbor wires have a clear channel already.
+    for (from, to) in [(ids[0], ids[1]), (ids[1], ids[2]), (ids[2], ids[3])] {
+        let link = graph
+            .connections()
+            .find(|c| c.from.node == from && c.to.node == to)
+            .unwrap();
+        assert!(link.waypoints.is_empty(), "{from:?}->{to:?} should stay straight");
+    }
+
+    // The long one crosses two columns, entering and leaving each.
+    let long = graph
+        .connections()
+        .find(|c| c.from.node == ids[0] && c.to.node == ids[3])
+        .unwrap();
+    assert_eq!(long.waypoints.len(), 4);
+}
+
+#[test]
+fn a_routed_wire_clears_the_nodes_it_passes() {
+    let (_f, mut graph, ids) = spanning();
+    let size = |_: &Graph, _: &nodez::Node| egui::vec2(120.0, 60.0);
+    nodez::route_links(&mut graph, &nodez::RouteOptions::default(), size).unwrap();
+
+    let blockers: Vec<egui::Rect> = [ids[1], ids[2]]
+        .iter()
+        .map(|id| egui::Rect::from_min_size(graph.node(*id).unwrap().position, egui::vec2(120.0, 60.0)))
+        .collect();
+    let long = graph
+        .connections()
+        .find(|c| c.from.node == ids[0] && c.to.node == ids[3])
+        .unwrap();
+    for point in &long.waypoints {
+        for rect in &blockers {
+            assert!(!rect.contains(*point), "waypoint {point:?} sits inside {rect:?}");
+        }
+    }
+}
+
+#[test]
+fn routing_is_idempotent() {
+    let (_f, mut graph, _ids) = spanning();
+    let size = |_: &Graph, _: &nodez::Node| egui::vec2(120.0, 60.0);
+    nodez::route_links(&mut graph, &nodez::RouteOptions::default(), size).unwrap();
+    let once: Vec<_> = graph.connections().map(|c| c.waypoints.clone()).collect();
+    nodez::route_links(&mut graph, &nodez::RouteOptions::default(), size).unwrap();
+    let twice: Vec<_> = graph.connections().map(|c| c.waypoints.clone()).collect();
+    assert_eq!(once, twice, "re-routing should replace, not accumulate");
+}
+
+#[test]
+fn routing_leaves_evaluation_alone() {
+    let f = fixture();
+    let mut graph = Graph::new();
+    let join = graph.add_node(&f.library, f.join, pos2(0.0, 0.0));
+    for part in ["a", "b", "c"] {
+        let n = graph.add_node(&f.library, f.text, pos2(0.0, 0.0));
+        graph.node_mut(n).unwrap().set_input_value("value", part);
+        graph.connect(&f.library, (n, "out"), (join, "parts")).unwrap();
+    }
+    let order = |g: &Graph| -> Vec<String> {
+        g.links_into(join, "parts")
+            .filter_map(|c| g.node(c.from.node)?.input_value("value"))
+            .filter_map(|v| v.as_str().map(str::to_owned))
+            .collect()
+    };
+    let before = order(&graph);
+
+    // Bend every wire by hand, then check nothing about the graph moved.
+    for id in graph.connections().map(|c| c.id).collect::<Vec<_>>() {
+        graph.connection_mut(id).unwrap().waypoints = vec![pos2(5.0, 5.0), pos2(9.0, 9.0)];
+    }
+    assert_eq!(order(&graph), before);
+    assert_eq!(graph.predecessors(join).len(), 3);
+    assert_eq!(graph.topological_order().unwrap().len(), 4);
+}
+
+#[test]
+fn waypoints_survive_a_save_and_load() {
+    let f = fixture();
+    let mut graph = Graph::new();
+    let a = graph.add_node(&f.library, f.text, pos2(0.0, 0.0));
+    let b = graph.add_node(&f.library, f.join, pos2(0.0, 0.0));
+    let link = graph.connect(&f.library, (a, "out"), (b, "parts")).unwrap();
+    graph.connection_mut(link).unwrap().waypoints = vec![pos2(12.0, 34.0)];
+
+    let restored: Graph = serde_json::from_str(&serde_json::to_string(&graph).unwrap()).unwrap();
+    assert_eq!(
+        restored.connection(link).unwrap().waypoints,
+        vec![pos2(12.0, 34.0)]
+    );
+}
+
+#[test]
+fn a_straight_wire_costs_nothing_to_store() {
+    let f = fixture();
+    let mut graph = Graph::new();
+    let a = graph.add_node(&f.library, f.text, pos2(0.0, 0.0));
+    let b = graph.add_node(&f.library, f.join, pos2(0.0, 0.0));
+    graph.connect(&f.library, (a, "out"), (b, "parts")).unwrap();
+    // An unrouted graph should serialize exactly as it did before waypoints.
+    assert!(!serde_json::to_string(&graph).unwrap().contains("waypoints"));
+}
+
 #[test]
 fn layered_layout_sorts_into_columns() {
     let f = fixture();

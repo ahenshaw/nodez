@@ -235,6 +235,12 @@ pub struct Connection {
     /// plugging it back does not move it to the end.
     #[cfg_attr(feature = "serde", serde(default))]
     pub order: u32,
+    /// Points in graph space the wire bends through, source to target.
+    ///
+    /// Purely how the wire is drawn. Nothing in traversal or evaluation reads
+    /// them, so a routed graph folds to exactly what an unrouted one does.
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Vec::is_empty"))]
+    pub waypoints: Vec<egui::Pos2>,
 }
 
 /// Why a connection was refused.
@@ -444,6 +450,14 @@ impl<N: NodeData> Graph<N> {
         self.connections.get(&id)
     }
 
+    /// Mutable access to one connection, for editing how its wire is drawn.
+    ///
+    /// The endpoints are the graph's own business; change those through
+    /// [`Graph::connect`] and [`Graph::disconnect`] so its bookkeeping keeps up.
+    pub fn connection_mut(&mut self, id: ConnectionId) -> Option<&mut Connection> {
+        self.connections.get_mut(&id)
+    }
+
     /// Check a prospective connection without performing it.
     ///
     /// Note that an existing wire on a single-link input is *not* an error:
@@ -603,8 +617,16 @@ impl<N: NodeData> Graph<N> {
     fn insert_connection(&mut self, from: SocketRef, to: SocketRef, order: u32) -> ConnectionId {
         let id = ConnectionId(self.next_connection);
         self.next_connection += 1;
-        self.connections
-            .insert(id, Connection { id, from, to, order });
+        self.connections.insert(
+            id,
+            Connection {
+                id,
+                from,
+                to,
+                order,
+                waypoints: Vec::new(),
+            },
+        );
         id
     }
 
@@ -805,6 +827,8 @@ impl<N: NodeData> Graph<N> {
                     from: SocketRef::new(from, conn.from.socket.clone()),
                     to: SocketRef::new(to, conn.to.socket.clone()),
                     order: conn.order,
+                    // The copy sits at an offset, so its bends do too.
+                    waypoints: conn.waypoints.iter().map(|p| *p + offset).collect(),
                 },
             );
         }

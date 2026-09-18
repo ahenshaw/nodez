@@ -117,7 +117,9 @@ pub use graph::{
     Connection, ConnectError, ConnectionId, CycleError, DynNode, Graph, Node, NodeData, NodeId,
     Repairs, SocketKind, SocketRef,
 };
-pub use layout::{Align, Axis, LayoutOptions, Spacing, align, distribute, layered};
+pub use layout::{
+    Align, Axis, LayoutOptions, RouteOptions, Spacing, align, distribute, layered, route_links,
+};
 pub use template::{
     DEFAULT_CATEGORY, NodeLibrary, NodeTemplate, ParamSpec, SocketSpec, TemplateId, Widget,
 };

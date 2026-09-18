@@ -601,6 +601,15 @@ impl<N: NodeData> EditorApp<N> {
             },
             |graph, node| node_size(graph, library, node, style),
         );
+        if result.is_ok() {
+            // Columns alone still let a long wire pass under everything
+            // between its ends, so steer those through the gaps.
+            let _ = crate::layout::route_links(
+                &mut self.graph,
+                &crate::layout::RouteOptions::default(),
+                |graph, node| node_size(graph, library, node, style),
+            );
+        }
         match result {
             Ok(()) => {
                 self.frame_next = true;

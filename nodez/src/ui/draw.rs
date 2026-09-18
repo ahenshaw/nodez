@@ -6,7 +6,7 @@ use egui::{Align2, Color32, CornerRadius, FontId, Painter, Pos2, Rect, Shape, St
 
 use crate::types::SocketShape;
 
-use super::geometry::{Viewport, wire_control_points};
+use super::geometry::{Viewport, wire_path};
 use super::style::EditorStyle;
 
 /// How a socket is being drawn right now.
@@ -89,23 +89,28 @@ pub(crate) fn paint_wire(
     painter: &Painter,
     from: Pos2,
     to: Pos2,
+    waypoints: &[Pos2],
     from_color: Color32,
     to_color: Color32,
     style: &EditorStyle,
     zoom: f32,
     highlighted: bool,
 ) {
-    let points = wire_control_points(from, to, style, zoom);
+    let path = wire_path(from, to, waypoints, style, zoom);
     let width = (style.wire_width * zoom).max(1.0);
 
     // A dark backing line reads as an outline against both nodes and canvas.
+    // Every segment is laid down before any of the colored pass, so a bend
+    // does not paint its outline over the segment before it.
     let outline_width = width + style.wire_outline_extra_width * zoom.max(0.5);
-    painter.add(CubicBezierShape::from_points_stroke(
-        points,
-        false,
-        Color32::TRANSPARENT,
-        PathStroke::new(outline_width, style.wire_outline),
-    ));
+    for points in &path {
+        painter.add(CubicBezierShape::from_points_stroke(
+            *points,
+            false,
+            Color32::TRANSPARENT,
+            PathStroke::new(outline_width, style.wire_outline),
+        ));
+    }
 
     let (a, b) = if highlighted {
         (
@@ -116,22 +121,26 @@ pub(crate) fn paint_wire(
         (from_color, to_color)
     };
 
+    // The gradient is placed along the straight run from socket to socket, so
+    // it stays put as a wire is rerouted.
     let direction = to - from;
     let length_sq = direction.length_sq().max(1.0);
-    let stroke = if a == b {
-        PathStroke::new(width, a)
-    } else {
-        PathStroke::new_uv(width, move |_bbox, pos| {
-            let t = ((pos - from).dot(direction) / length_sq).clamp(0.0, 1.0);
-            lerp_color(a, b, t)
-        })
-    };
-    painter.add(CubicBezierShape::from_points_stroke(
-        points,
-        false,
-        Color32::TRANSPARENT,
-        stroke,
-    ));
+    for points in &path {
+        let stroke = if a == b {
+            PathStroke::new(width, a)
+        } else {
+            PathStroke::new_uv(width, move |_bbox, pos| {
+                let t = ((pos - from).dot(direction) / length_sq).clamp(0.0, 1.0);
+                lerp_color(a, b, t)
+            })
+        };
+        painter.add(CubicBezierShape::from_points_stroke(
+            *points,
+            false,
+            Color32::TRANSPARENT,
+            stroke,
+        ));
+    }
 }
 
 /// Paint a socket in the shape its data type asked for.

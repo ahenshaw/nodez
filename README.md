@@ -302,6 +302,27 @@ All three take a `size_of` closure so they can measure what the editor draws:
 |graph, node| nodez::node_size(graph, library, node, style)
 ```
 
+## Keeping wires out from under nodes
+
+Columns alone do not stop a wire that spans several of them from crossing the
+ones between, so `route_links` steers those through the gaps. Run it after
+`layered` — the demo's Auto layout button does both:
+
+```rust
+nodez::layered(&mut graph, &LayoutOptions::default(), size_of)?;
+nodez::route_links(&mut graph, &RouteOptions::default(), size_of)?;
+```
+
+It writes `Connection::waypoints`, points the wire bends through. Those are
+only how the wire is drawn: traversal, evaluation and the config you generate
+see exactly what they would have seen unrouted. A wire that reaches no further
+than the next column keeps no waypoints, and an unrouted graph serializes
+without the field at all.
+
+Waypoints stay where they are put, so moving a node afterwards does not
+re-route its wires. Run `route_links` again to redo them, or clear
+`waypoints` on a connection to straighten one back out.
+
 ## Just the widget
 
 `EditorApp` is a window; `NodeEditor` is the canvas alone, for dropping into an

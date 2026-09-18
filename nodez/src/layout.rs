@@ -5,9 +5,9 @@
 
 use std::collections::HashMap;
 
-use egui::{Pos2, Vec2, pos2};
+use egui::{Pos2, Rect, Vec2, pos2};
 
-use crate::graph::{CycleError, Graph, Node, NodeData, NodeId};
+use crate::graph::{ConnectionId, CycleError, Graph, Node, NodeData, NodeId};
 
 /// Spacing knobs for [`layered`].
 #[derive(Clone, Copy, Debug)]
@@ -345,4 +345,217 @@ fn max_by(measured: &[(NodeId, Pos2, Vec2)], f: impl Fn(Pos2, Vec2) -> f32) -> f
         .iter()
         .map(|(_, p, s)| f(*p, *s))
         .fold(f32::NEG_INFINITY, f32::max)
+}
+
+/// How much room [`route_links`] leaves around the nodes it steers wires past.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RouteOptions {
+    /// Clearance kept outside a column when there is no channel to use.
+    pub margin: f32,
+    /// How far apart wires sharing a lane are fanned, so they stay countable.
+    pub spread: f32,
+    /// A gap narrower than this is not worth threading a wire through.
+    pub min_lane: f32,
+}
+
+impl Default for RouteOptions {
+    fn default() -> Self {
+        Self {
+            margin: 24.0,
+            spread: 7.0,
+            min_lane: 20.0,
+        }
+    }
+}
+
+/// Bend every wire that spans more than one column around the nodes in
+/// between, instead of letting it pass under them.
+///
+/// Expects a graph already arranged in columns, as [`layered`] leaves it, and
+/// is meant to run straight after it. Wires that only reach the next column
+/// are left straight, and re-running replaces the previous routing rather than
+/// adding to it.
+///
+/// Only [`crate::Connection::waypoints`] changes, so nothing about traversal
+/// or evaluation is affected.
+pub fn route_links<N: NodeData>(
+    graph: &mut Graph<N>,
+    options: &RouteOptions,
+    size_of: impl Fn(&Graph<N>, &Node<N>) -> Vec2,
+) -> Result<(), CycleError> {
+    let depths = graph.depths()?;
+    if depths.is_empty() {
+        return Ok(());
+    }
+
+    // Measure first: the plan is built against the graph, then written back.
+    let rects: HashMap<NodeId, Rect> = graph
+        .nodes()
+        .map(|node| (node.id, Rect::from_min_size(node.position, size_of(graph, node))))
+        .collect();
+
+    // Each column's nodes, top to bottom, and how far it reaches across.
+    let mut columns: HashMap<usize, Vec<Rect>> = HashMap::new();
+    for (id, depth) in &depths {
+        if let Some(rect) = rects.get(id) {
+            columns.entry(*depth).or_default().push(*rect);
+        }
+    }
+    for rects in columns.values_mut() {
+        rects.sort_by(|a, b| a.top().total_cmp(&b.top()));
+    }
+    let extent: HashMap<usize, (f32, f32)> = columns
+        .iter()
+        .map(|(depth, rects)| {
+            let left = rects.iter().map(|r| r.left()).fold(f32::INFINITY, f32::min);
+            let right = rects.iter().map(|r| r.right()).fold(f32::NEG_INFINITY, f32::max);
+            (*depth, (left, right))
+        })
+        .collect();
+
+    // A wire changes height in the clear channel between two columns, never
+    // alongside one, where it would run through the sockets.
+    let channel_before = |column: usize| -> f32 {
+        let (left, _) = extent[&column];
+        match column.checked_sub(1).and_then(|prev| extent.get(&prev)) {
+            Some((_, prev_right)) => (prev_right + left) * 0.5,
+            None => left - options.margin,
+        }
+    };
+    let channel_after = |column: usize| -> f32 {
+        let (_, right) = extent[&column];
+        match extent.get(&(column + 1)) {
+            Some((next_left, _)) => (right + next_left) * 0.5,
+            None => right + options.margin,
+        }
+    };
+
+    let mut links: Vec<_> = graph
+        .connections()
+        .map(|c| (c.id, c.from.node, c.to.node))
+        .collect();
+    links.sort_by_key(|(id, _, _)| id.0);
+
+    // Pass one: which columns each wire has to cross, and the clear lane
+    // through each of them.
+    let mut routes: Vec<Route> = Vec::new();
+    for (id, from, to) in links {
+        let mut route = Route {
+            link: id,
+            crossings: Vec::new(),
+        };
+        let (Some(&start), Some(&end)) = (depths.get(&from), depths.get(&to)) else {
+            routes.push(route);
+            continue;
+        };
+        let (Some(from_rect), Some(to_rect)) = (rects.get(&from), rects.get(&to)) else {
+            routes.push(route);
+            continue;
+        };
+        // Neighboring columns already have a clear channel between them.
+        if end > start + 1 {
+            for column in start + 1..end {
+                let Some(rects) = columns.get(&column) else {
+                    continue;
+                };
+                // Where the wire would like to be by the time it gets here.
+                let t = (column - start) as f32 / (end - start) as f32;
+                let want =
+                    from_rect.center().y + (to_rect.center().y - from_rect.center().y) * t;
+                route.crossings.push(Crossing {
+                    column,
+                    lane: nearest_lane(rects, want, options),
+                    want,
+                });
+            }
+        }
+        routes.push(route);
+    }
+
+    // Pass two: fan the wires that chose the same lane, ordered by where each
+    // was heading, so a bundle neither overlaps nor crosses itself.
+    let mut lanes: HashMap<(usize, i32), Vec<Sharer>> = HashMap::new();
+    for (r, route) in routes.iter().enumerate() {
+        for (c, crossing) in route.crossings.iter().enumerate() {
+            lanes
+                .entry((crossing.column, (crossing.lane / 4.0).round() as i32))
+                .or_default()
+                .push(Sharer {
+                    route: r,
+                    crossing: c,
+                    want: crossing.want,
+                });
+        }
+    }
+    let mut offsets: HashMap<(usize, usize), f32> = HashMap::new();
+    for sharers in lanes.values_mut() {
+        sharers.sort_by(|a, b| a.want.total_cmp(&b.want).then(a.route.cmp(&b.route)));
+        let last = sharers.len().saturating_sub(1) as f32;
+        for (k, sharer) in sharers.iter().enumerate() {
+            offsets.insert(
+                (sharer.route, sharer.crossing),
+                (k as f32 - last * 0.5) * options.spread,
+            );
+        }
+    }
+
+    for (r, route) in routes.into_iter().enumerate() {
+        let mut waypoints = Vec::with_capacity(route.crossings.len() * 2);
+        for (c, crossing) in route.crossings.into_iter().enumerate() {
+            let y = crossing.lane + offsets.get(&(r, c)).copied().unwrap_or(0.0);
+            // Enter and leave at the same height, so the wire runs flat past
+            // the column rather than dipping through it.
+            waypoints.push(pos2(channel_before(crossing.column), y));
+            waypoints.push(pos2(channel_after(crossing.column), y));
+        }
+        if let Some(conn) = graph.connection_mut(route.link) {
+            conn.waypoints = waypoints;
+        }
+    }
+    Ok(())
+}
+
+/// One wire's plan: the columns it has to get past, in order.
+struct Route {
+    link: ConnectionId,
+    crossings: Vec<Crossing>,
+}
+
+/// A column a wire crosses, and the lane it picked there.
+struct Crossing {
+    column: usize,
+    lane: f32,
+    /// Where the wire was heading, which orders it within a shared lane.
+    want: f32,
+}
+
+/// One wire's claim on a lane another wire also wants.
+struct Sharer {
+    route: usize,
+    crossing: usize,
+    want: f32,
+}
+
+/// The clear horizontal lane through a column that sits closest to `want`.
+///
+/// Candidates are the gaps between the column's nodes, plus the open space
+/// above the first and below the last.
+fn nearest_lane(rects: &[Rect], want: f32, options: &RouteOptions) -> f32 {
+    let mut lanes = Vec::with_capacity(rects.len() + 1);
+    if let Some(first) = rects.first() {
+        lanes.push(first.top() - options.margin);
+    }
+    for pair in rects.windows(2) {
+        if pair[1].top() - pair[0].bottom() >= options.min_lane {
+            lanes.push((pair[0].bottom() + pair[1].top()) * 0.5);
+        }
+    }
+    if let Some(last) = rects.last() {
+        lanes.push(last.bottom() + options.margin);
+    }
+
+    lanes
+        .into_iter()
+        .min_by(|a, b| (a - want).abs().total_cmp(&(b - want).abs()))
+        .unwrap_or(want)
 }
