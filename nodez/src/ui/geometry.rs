@@ -247,6 +247,29 @@ fn collapsed_width(width: f32, style: &EditorStyle) -> f32 {
 }
 
 /// Lay a node out in screen space.
+/// Where one of a node's wires attaches, in graph space.
+///
+/// Routing needs this rather than the node's edge: a wire leaves a socket, and
+/// on a tall node the difference is most of its height.
+pub fn socket_anchor<N: NodeData>(
+    graph: &Graph<N>,
+    library: &NodeLibrary,
+    node: &Node<N>,
+    style: &EditorStyle,
+    kind: SocketKind,
+    socket: &str,
+) -> Option<Pos2> {
+    // An identity viewport leaves the geometry in graph space.
+    let viewport = Viewport {
+        screen: Rect::from_min_size(Pos2::ZERO, Vec2::ZERO),
+        pan: Vec2::ZERO,
+        zoom: 1.0,
+    };
+    node_geometry(graph, library, node, style, &viewport)
+        .socket_named(kind, socket)
+        .map(|socket| socket.center)
+}
+
 pub(crate) fn node_geometry<N: NodeData>(
     graph: &Graph<N>,
     library: &NodeLibrary,
@@ -557,9 +580,13 @@ pub(crate) fn wire_path(
     (0..points.len() - 1)
         .map(|i| {
             let (a, b) = (points[i], points[i + 1]);
-            // Short spans get a proportionally shorter reach, or the control
-            // points overshoot each other and the wire ties a knot.
-            let pull = segment_pull(a, b, style, zoom).min((b - a).length() * 0.5);
+            // A routed wire tracks its waypoints closely: they were chosen to
+            // clear the nodes, and a wide curve between them would undo that.
+            // Short spans get a shorter reach again, or the control points
+            // overshoot each other and the wire ties a knot.
+            let pull = segment_pull(a, b, style, zoom)
+                .min(viewport_scaled(style.wire_min_curve, zoom))
+                .min((b - a).length() * 0.5);
             [a, a + tangent(i) * pull, b - tangent(i + 1) * pull, b]
         })
         .collect()
@@ -599,4 +626,108 @@ fn distance_to_segment(p: Pos2, a: Pos2, b: Pos2) -> f32 {
     }
     let t = ((p - a).dot(ab) / len_sq).clamp(0.0, 1.0);
     (p - (a + ab * t)).length()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::SocketKind;
+    use crate::layout::{LayoutOptions, RouteOptions};
+    use crate::template::{NodeLibrary, NodeTemplate, SocketSpec};
+
+    /// Four columns, three nodes deep in the middle two, with wires running
+    /// the whole width. Those are the ones that used to cut through whatever
+    /// stood in the way.
+    fn crowded() -> (NodeLibrary, crate::Graph) {
+        let mut library = NodeLibrary::new();
+        let ty = library.types.add("T", egui::Color32::GRAY);
+        let source = library.register(
+            NodeTemplate::new("source", "Source").output(SocketSpec::new("out", ty)),
+        );
+        let mid = library.register(
+            NodeTemplate::new("mid", "Mid")
+                .input(SocketSpec::new("a", ty).multi())
+                .input(SocketSpec::new("b", ty))
+                .output(SocketSpec::new("out", ty)),
+        );
+
+        let mut graph = crate::Graph::new();
+        let at = pos2(0.0, 0.0);
+        let sources: Vec<_> = (0..3).map(|_| graph.add_node(&library, source, at)).collect();
+        let col1: Vec<_> = (0..3).map(|_| graph.add_node(&library, mid, at)).collect();
+        let col2: Vec<_> = (0..3).map(|_| graph.add_node(&library, mid, at)).collect();
+        let sink = graph.add_node(&library, mid, at);
+
+        for (s, m) in sources.iter().zip(&col1) {
+            graph.connect(&library, (*s, "out"), (*m, "a")).unwrap();
+        }
+        for (a, b) in col1.iter().zip(&col2) {
+            graph.connect(&library, (*a, "out"), (*b, "a")).unwrap();
+        }
+        for b in &col2 {
+            graph.connect(&library, (*b, "out"), (sink, "a")).unwrap();
+        }
+        // The long ones: straight from the first column to the last.
+        for s in &sources {
+            graph.connect(&library, (*s, "out"), (sink, "a")).unwrap();
+        }
+        (library, graph)
+    }
+
+    #[test]
+    fn routed_wires_do_not_cross_nodes() {
+        let (library, mut graph) = crowded();
+        let style = EditorStyle::default();
+        let size = |g: &crate::Graph, n: &crate::Node| node_size(g, &library, n, &style);
+
+        crate::layout::layered(&mut graph, &LayoutOptions::default(), size).unwrap();
+        crate::layout::route_links(
+            &mut graph,
+            &RouteOptions {
+                curvature: style.wire_curvature,
+                min_curve: style.wire_min_curve,
+                max_curve: style.wire_max_curve,
+                ..RouteOptions::default()
+            },
+            size,
+            |g, socket, kind| {
+                let node = g.node(socket.node)?;
+                socket_anchor(g, &library, node, &style, kind, &socket.socket)
+            },
+        )
+        .unwrap();
+
+        let rects: Vec<(crate::NodeId, Rect)> = graph
+            .nodes()
+            .map(|n| (n.id, Rect::from_min_size(n.position, size(&graph, n))))
+            .collect();
+
+        let mut crossings = Vec::new();
+        for conn in graph.connections() {
+            let from_node = graph.node(conn.from.node).unwrap();
+            let to_node = graph.node(conn.to.node).unwrap();
+            let a = socket_anchor(&graph, &library, from_node, &style, SocketKind::Output,
+                &conn.from.socket).unwrap();
+            let b = socket_anchor(&graph, &library, to_node, &style, SocketKind::Input,
+                &conn.to.socket).unwrap();
+
+            // The path exactly as the editor draws it, at zoom 1.
+            for points in wire_path(a, b, &conn.waypoints, &style, 1.0) {
+                for i in 0..=24 {
+                    let p = bezier_point(&points, i as f32 / 24.0);
+                    for (id, rect) in &rects {
+                        if *id != conn.from.node && *id != conn.to.node && rect.contains(p) {
+                            crossings.push((conn.id, *id, p));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            crossings.is_empty(),
+            "{} wire samples land inside a node: {:?}",
+            crossings.len(),
+            &crossings[..crossings.len().min(4)]
+        );
+    }
 }

@@ -606,8 +606,17 @@ impl<N: NodeData> EditorApp<N> {
             // between its ends, so steer those through the gaps.
             let _ = crate::layout::route_links(
                 &mut self.graph,
-                &crate::layout::RouteOptions::default(),
+                &crate::layout::RouteOptions {
+                    curvature: style.wire_curvature,
+                    min_curve: style.wire_min_curve,
+                    max_curve: style.wire_max_curve,
+                    ..crate::layout::RouteOptions::default()
+                },
                 |graph, node| node_size(graph, library, node, style),
+                |graph, socket, kind| {
+                    let node = graph.node(socket.node)?;
+                    crate::socket_anchor(graph, library, node, style, kind, &socket.socket)
+                },
             );
         }
         match result {

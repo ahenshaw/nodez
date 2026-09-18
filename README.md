@@ -304,20 +304,36 @@ All three take a `size_of` closure so they can measure what the editor draws:
 
 ## Keeping wires out from under nodes
 
-Columns alone do not stop a wire that spans several of them from crossing the
-ones between, so `route_links` steers those through the gaps. Run it after
-`layered` — the demo's Auto layout button does both:
+Columns alone do not stop a wire from crossing whatever stands between its
+ends, so `route_links` steers those around. Run it after `layered` — the
+demo's Auto layout button does both:
 
 ```rust
 nodez::layered(&mut graph, &LayoutOptions::default(), size_of)?;
-nodez::route_links(&mut graph, &RouteOptions::default(), size_of)?;
+nodez::route_links(&mut graph, &RouteOptions::default(), size_of, anchor_of)?;
 ```
+
+`anchor_of` says where a wire attaches, which `socket_anchor` answers:
+
+```rust
+|graph, socket, kind| {
+    let node = graph.node(socket.node)?;
+    nodez::socket_anchor(graph, library, node, style, kind, &socket.socket)
+}
+```
+
+A wire whose own curve already clears everything in its way is left alone, so
+simple graphs keep their plain noodles. Anything else is pinned into the clear
+channels between columns and threaded through a gap in each column it crosses.
 
 It writes `Connection::waypoints`, points the wire bends through. Those are
 only how the wire is drawn: traversal, evaluation and the config you generate
-see exactly what they would have seen unrouted. A wire that reaches no further
-than the next column keeps no waypoints, and an unrouted graph serializes
+see exactly what they would have seen unrouted. An unrouted graph serializes
 without the field at all.
+
+`RouteOptions` carries a copy of the wire shape (`curvature`, `min_curve`,
+`max_curve`) so the router can judge where a wire really goes. If you change
+those on `EditorStyle`, change them here too.
 
 Waypoints stay where they are put, so moving a node afterwards does not
 re-route its wires. Run `route_links` again to redo them, or clear

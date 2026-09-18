@@ -12,6 +12,7 @@ mod widgets;
 
 pub use geometry::{
     NodeGeometry, RowGeometry, RowKind, SocketGeometry, Viewport, free_position, node_size,
+    socket_anchor,
 };
 pub use style::EditorStyle;
 

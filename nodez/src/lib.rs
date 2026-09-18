@@ -132,5 +132,6 @@ pub use types::{
 };
 pub use ui::{
     EditorAction, EditorResponse, EditorState, EditorStyle, NodeEditor, ScrollMode, node_size,
+    socket_anchor,
 };
 pub use value::{MapBuilder, Value, ValueKind};

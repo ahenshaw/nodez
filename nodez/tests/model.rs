@@ -441,7 +441,8 @@ fn spanning() -> (Fixture, Graph, Vec<nodez::NodeId>) {
 fn routing_bends_only_the_wires_that_span_columns() {
     let (_f, mut graph, ids) = spanning();
     let size = |_: &Graph, _: &nodez::Node| egui::vec2(120.0, 60.0);
-    nodez::route_links(&mut graph, &nodez::RouteOptions::default(), size).unwrap();
+    let anchors = |_: &Graph, _: &nodez::SocketRef, _: nodez::SocketKind| None;
+    nodez::route_links(&mut graph, &nodez::RouteOptions::default(), size, anchors).unwrap();
 
     // Neighbor-to-neighbor wires have a clear channel already.
     for (from, to) in [(ids[0], ids[1]), (ids[1], ids[2]), (ids[2], ids[3])] {
@@ -452,19 +453,24 @@ fn routing_bends_only_the_wires_that_span_columns() {
         assert!(link.waypoints.is_empty(), "{from:?}->{to:?} should stay straight");
     }
 
-    // The long one crosses two columns, entering and leaving each.
+    // The long one is pinned into the channel at each end and runs flat past
+    // each of the two columns in between: 2 + 2 * 2.
     let long = graph
         .connections()
         .find(|c| c.from.node == ids[0] && c.to.node == ids[3])
         .unwrap();
-    assert_eq!(long.waypoints.len(), 4);
+    assert_eq!(long.waypoints.len(), 6);
+    // It only ever moves forward.
+    let xs: Vec<f32> = long.waypoints.iter().map(|p| p.x).collect();
+    assert!(xs.windows(2).all(|w| w[0] <= w[1]), "waypoints double back: {xs:?}");
 }
 
 #[test]
 fn a_routed_wire_clears_the_nodes_it_passes() {
     let (_f, mut graph, ids) = spanning();
     let size = |_: &Graph, _: &nodez::Node| egui::vec2(120.0, 60.0);
-    nodez::route_links(&mut graph, &nodez::RouteOptions::default(), size).unwrap();
+    let anchors = |_: &Graph, _: &nodez::SocketRef, _: nodez::SocketKind| None;
+    nodez::route_links(&mut graph, &nodez::RouteOptions::default(), size, anchors).unwrap();
 
     let blockers: Vec<egui::Rect> = [ids[1], ids[2]]
         .iter()
@@ -485,9 +491,10 @@ fn a_routed_wire_clears_the_nodes_it_passes() {
 fn routing_is_idempotent() {
     let (_f, mut graph, _ids) = spanning();
     let size = |_: &Graph, _: &nodez::Node| egui::vec2(120.0, 60.0);
-    nodez::route_links(&mut graph, &nodez::RouteOptions::default(), size).unwrap();
+    let anchors = |_: &Graph, _: &nodez::SocketRef, _: nodez::SocketKind| None;
+    nodez::route_links(&mut graph, &nodez::RouteOptions::default(), size, anchors).unwrap();
     let once: Vec<_> = graph.connections().map(|c| c.waypoints.clone()).collect();
-    nodez::route_links(&mut graph, &nodez::RouteOptions::default(), size).unwrap();
+    nodez::route_links(&mut graph, &nodez::RouteOptions::default(), size, anchors).unwrap();
     let twice: Vec<_> = graph.connections().map(|c| c.waypoints.clone()).collect();
     assert_eq!(once, twice, "re-routing should replace, not accumulate");
 }
