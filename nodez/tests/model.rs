@@ -492,6 +492,21 @@ fn a_routed_wire_clears_the_nodes_it_passes() {
 }
 
 #[test]
+fn routing_can_be_undone() {
+    let (_f, mut graph, _ids) = spanning();
+    let size = |_: &Graph, _: &nodez::Node| egui::vec2(120.0, 60.0);
+    let anchors = |_: &Graph, _: &nodez::SocketRef, _: nodez::SocketKind| None;
+    nodez::route_links(&mut graph, &nodez::RouteOptions::default(), size, anchors).unwrap();
+    assert!(graph.connections().any(|c| !c.waypoints.is_empty()));
+
+    let cleared = graph.clear_routing();
+    assert_eq!(cleared, 1, "only the long wire needed routing");
+    assert!(graph.connections().all(|c| c.waypoints.is_empty()));
+    // And a graph with nothing to undo says so.
+    assert_eq!(graph.clear_routing(), 0);
+}
+
+#[test]
 fn routing_is_idempotent() {
     let (_f, mut graph, _ids) = spanning();
     let size = |_: &Graph, _: &nodez::Node| egui::vec2(120.0, 60.0);

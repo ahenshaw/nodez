@@ -450,6 +450,21 @@ impl<N: NodeData> Graph<N> {
         self.connections.get(&id)
     }
 
+    /// Straighten every wire, dropping whatever routing they carry.
+    ///
+    /// The other half of [`crate::route_links`]: this is how a graph goes back
+    /// to plain noodles. Returns how many wires were carrying a bend.
+    pub fn clear_routing(&mut self) -> usize {
+        let mut cleared = 0;
+        for conn in self.connections.values_mut() {
+            if !conn.waypoints.is_empty() {
+                conn.waypoints.clear();
+                cleared += 1;
+            }
+        }
+        cleared
+    }
+
     /// Mutable access to one connection, for editing how its wire is drawn.
     ///
     /// The endpoints are the graph's own business; change those through

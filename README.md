@@ -336,9 +336,20 @@ without the field at all.
 `max_curve`) so the router can judge where a wire really goes. If you change
 those on `EditorStyle`, change them here too.
 
-Waypoints stay where they are put, so moving a node afterwards does not
-re-route its wires. Run `route_links` again to redo them, or clear
-`waypoints` on a connection to straighten one back out.
+Routing is a choice, not the house style. `Graph::clear_routing` straightens
+every wire again, and `EditorApp` carries the toggle for you:
+
+```rust
+EditorApp::new(library).routing(false)   // plain noodles
+```
+
+The editor's Route box flips it live, and while it is on the wires are
+re-routed as the graph changes, so moving a node does not leave its wires
+bent around where it used to be. Routing runs once an edit or a drag finishes,
+never while one is in flight.
+
+`clear_routing` returns how many wires were carrying a bend, and clearing
+`waypoints` on a single connection straightens just that one.
 
 ## Just the widget
 

@@ -99,6 +99,8 @@ pub struct EditorApp<N: NodeData = DynNode> {
     generated: Preview,
     status: Status,
     show_inspector: bool,
+    /// Whether wires are steered around the nodes in their way.
+    route_wires: bool,
     /// Frame the graph once the editor's rect is known.
     frame_next: bool,
     /// A template the palette asked to add, applied after the panel closes.
@@ -119,10 +121,20 @@ impl<N: NodeData> EditorApp<N> {
             generated: Preview::default(),
             status: Status::default(),
             show_inspector: true,
+            route_wires: true,
             frame_next: true,
             pending_add: None,
             preview_extension: "out".to_owned(),
         }
+    }
+
+    /// Whether to steer wires around the nodes in their way, rather than let
+    /// them run straight and pass underneath. On by default.
+    ///
+    /// The editor's Route box toggles the same thing.
+    pub fn routing(mut self, route: bool) -> Self {
+        self.route_wires = route;
+        self
     }
 
     /// Start from an existing graph rather than an empty one.
@@ -264,6 +276,16 @@ impl<N: NodeData> EditorApp<N> {
             {
                 self.generated = preview(&self.graph, &self.library);
             }
+            // Keep the wires routed as the graph changes. Both of these land
+            // once an edit or a drag is finished, not while one is in flight,
+            // so this costs nothing per frame.
+            let moved = response
+                .actions
+                .iter()
+                .any(|a| matches!(a, EditorAction::NodesMoved(_)));
+            if self.route_wires && (response.changed || moved) {
+                self.apply_routing();
+            }
             for action in &response.actions {
                 if let EditorAction::ConnectionRejected(e) = action {
                     self.status.error(e.to_string());
@@ -337,6 +359,13 @@ impl<N: NodeData> EditorApp<N> {
                     self.frame_next = true;
                 }
                 ui.checkbox(&mut self.editor.style.show_grid, "Grid");
+                if ui
+                    .checkbox(&mut self.route_wires, "Route")
+                    .on_hover_text("Steer wires around the nodes in their way")
+                    .changed()
+                {
+                    self.apply_routing();
+                }
                 ui.checkbox(&mut self.show_inspector, "Inspector");
 
                 egui::ComboBox::from_id_salt("nodez-scroll-mode")
@@ -589,6 +618,30 @@ impl<N: NodeData> EditorApp<N> {
         });
     }
 
+    /// Route the wires, or straighten them, to match the Route box.
+    fn apply_routing(&mut self) {
+        if !self.route_wires {
+            self.graph.clear_routing();
+            return;
+        }
+        let library = &self.library;
+        let style = &self.editor.style;
+        let _ = crate::layout::route_links(
+            &mut self.graph,
+            &crate::layout::RouteOptions {
+                curvature: style.wire_curvature,
+                min_curve: style.wire_min_curve,
+                max_curve: style.wire_max_curve,
+                ..crate::layout::RouteOptions::default()
+            },
+            |graph, node| node_size(graph, library, node, style),
+            |graph, socket, kind| {
+                let node = graph.node(socket.node)?;
+                crate::socket_anchor(graph, library, node, style, kind, &socket.socket)
+            },
+        );
+    }
+
     fn auto_layout(&mut self) {
         let library = &self.library;
         let style = &self.editor.style;
@@ -603,21 +656,8 @@ impl<N: NodeData> EditorApp<N> {
         );
         if result.is_ok() {
             // Columns alone still let a long wire pass under everything
-            // between its ends, so steer those through the gaps.
-            let _ = crate::layout::route_links(
-                &mut self.graph,
-                &crate::layout::RouteOptions {
-                    curvature: style.wire_curvature,
-                    min_curve: style.wire_min_curve,
-                    max_curve: style.wire_max_curve,
-                    ..crate::layout::RouteOptions::default()
-                },
-                |graph, node| node_size(graph, library, node, style),
-                |graph, socket, kind| {
-                    let node = graph.node(socket.node)?;
-                    crate::socket_anchor(graph, library, node, style, kind, &socket.socket)
-                },
-            );
+            // between its ends.
+            self.apply_routing();
         }
         match result {
             Ok(()) => {
