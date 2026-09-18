@@ -208,6 +208,7 @@ impl<N: NodeData + 'static> EditorApp<N> {
     pub fn run(mut self) -> eframe::Result {
         self.regenerate();
         let title = self.title.clone();
+        let (theme, panel) = chrome(&self.editor.style);
         let options = eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
                 .with_inner_size([1480.0, 920.0])
@@ -218,11 +219,15 @@ impl<N: NodeData + 'static> EditorApp<N> {
         eframe::run_native(
             &title,
             options,
-            Box::new(|cc| {
-                cc.egui_ctx.set_visuals(egui::Visuals::dark());
-                cc.egui_ctx.all_styles_mut(|style| {
-                    style.visuals.panel_fill = Color32::from_rgb(0x2B, 0x2B, 0x2B);
-                    style.visuals.window_fill = Color32::from_rgb(0x2B, 0x2B, 0x2B);
+            Box::new(move |cc| {
+                // The canvas is painted from EditorStyle, not from egui's
+                // theme, so pin egui to whichever the style is. Left to follow
+                // the system, a light-mode desktop paints this chrome with
+                // near-black text and the sidebar becomes unreadable.
+                cc.egui_ctx.set_theme(theme);
+                cc.egui_ctx.style_mut_of(theme, |style| {
+                    style.visuals.panel_fill = panel;
+                    style.visuals.window_fill = panel;
                 });
                 Ok(Box::new(self))
             }),
@@ -395,19 +400,19 @@ impl<N: NodeData> EditorApp<N> {
     }
 
     fn palette(&mut self, ui: &mut egui::Ui) {
+        let dark = self.editor.style.background.r() < 128;
         let categories: Vec<String> = self.library.categories().map(str::to_owned).collect();
         for category in categories {
             let tint = self
                 .library
                 .category_color(&category)
                 .unwrap_or(Color32::GRAY);
-            egui::CollapsingHeader::new(RichText::new(&category).color(lighten(tint)))
+            egui::CollapsingHeader::new(RichText::new(&category).color(readable(tint, dark)))
                 .default_open(true)
                 .show(ui, |ui| {
                     for (id, template) in self.library.in_category(&category) {
                         let button = ui.add(
                             egui::Button::new(&template.label)
-                                .fill(Color32::from_rgb(0x38, 0x38, 0x38))
                                 .min_size(egui::vec2(ui.available_width(), 0.0)),
                         );
                         let button = if template.description.is_empty() {
@@ -666,10 +671,26 @@ impl<N: NodeData> std::fmt::Debug for EditorApp<N> {
     }
 }
 
-fn lighten(color: Color32) -> Color32 {
-    Color32::from_rgb(
-        color.r().saturating_add(0x50),
-        color.g().saturating_add(0x50),
-        color.b().saturating_add(0x50),
-    )
+/// The egui theme and panel color that go with an editor style.
+///
+/// The panel sits one step off the canvas, the way Blender's editors do, so
+/// both come from the one background color rather than being picked twice.
+fn chrome(style: &EditorStyle) -> (egui::Theme, Color32) {
+    let background = style.background;
+    if background.r() < 128 {
+        (egui::Theme::Dark, shift(background, 0x0E))
+    } else {
+        (egui::Theme::Light, shift(background, -0x0E))
+    }
+}
+
+fn shift(color: Color32, by: i32) -> Color32 {
+    let channel = |c: u8| (i32::from(c) + by).clamp(0, 255) as u8;
+    Color32::from_rgb(channel(color.r()), channel(color.g()), channel(color.b()))
+}
+
+/// Nudge a category tint away from the panel behind it, so one tint reads on
+/// either theme.
+fn readable(tint: Color32, dark: bool) -> Color32 {
+    shift(tint, if dark { 0x50 } else { -0x50 })
 }
