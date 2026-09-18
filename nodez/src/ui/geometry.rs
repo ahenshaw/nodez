@@ -865,6 +865,56 @@ mod tests {
         assert!(checked > 0, "no wire past the first slot was routed");
     }
 
+    /// Two wires climbing the same channel must not be drawn one on top of
+    /// the other, the same way two crossing at the same height are fanned.
+    #[test]
+    fn wires_climbing_one_channel_get_their_own_line() {
+        let (library, mut graph) = crowded();
+        let style = EditorStyle::default();
+        let size = |g: &crate::Graph, n: &crate::Node| node_size(g, &library, n, &style);
+
+        crate::layout::layered(&mut graph, &LayoutOptions::default(), size).unwrap();
+        crate::layout::route_links(
+            &mut graph,
+            &RouteOptions::default(),
+            size,
+            |g, socket, kind, slot| {
+                let node = g.node(socket.node)?;
+                socket_anchor(g, &library, node, &style, kind, &socket.socket, slot)
+            },
+        )
+        .unwrap();
+
+        // Every stretch of wire that runs straight down.
+        let mut climbs = Vec::new();
+        for conn in graph.connections() {
+            for pair in conn.waypoints.windows(2) {
+                if (pair[0].x - pair[1].x).abs() < 0.01 && (pair[0].y - pair[1].y).abs() > 1.0 {
+                    climbs.push((
+                        conn.id,
+                        pair[0].x,
+                        pair[0].y.min(pair[1].y),
+                        pair[0].y.max(pair[1].y),
+                    ));
+                }
+            }
+        }
+        assert!(climbs.len() > 1, "this graph needs climbs, or it proves nothing");
+
+        for (i, a) in climbs.iter().enumerate() {
+            for b in &climbs[i + 1..] {
+                let overlaps = a.2.max(b.2) < a.3.min(b.3);
+                assert!(
+                    !(overlaps && (a.1 - b.1).abs() < 0.5),
+                    "{:?} and {:?} climb the same line at x {}",
+                    a.0,
+                    b.0,
+                    a.1
+                );
+            }
+        }
+    }
+
     #[test]
     fn a_routed_wire_crosses_at_one_height() {
         let (library, mut graph) = crowded();

@@ -331,6 +331,11 @@ simple graphs keep their plain noodles. Anything else crosses every column in
 its way at a single height, picked clear of all of them and, where it can be,
 level with one end — so a routed wire bends twice at most, and often once.
 
+Wires sharing a height are fanned apart across the run, and wires sharing a
+channel each get their own line down it, as far as the channel allows. A
+narrow channel crowds them rather than overflowing into the columns either
+side, so widen `column_gap` if a graph needs more room than it has.
+
 It writes `Connection::waypoints`, points the wire bends through. Those are
 only how the wire is drawn: traversal, evaluation and the config you generate
 see exactly what they would have seen unrouted. An unrouted graph serializes

@@ -434,19 +434,32 @@ pub fn route_links<N: NodeData>(
         .collect();
 
     // A wire changes height in the clear channel between two columns, never
-    // alongside one, where the sockets are.
-    let channel_before = |column: usize| -> f32 {
-        let (left, _) = extent[&column];
-        match column.checked_sub(1).and_then(|prev| extent.get(&prev)) {
-            Some((_, prev_right)) => (prev_right + left) * 0.5,
-            None => left - options.margin,
-        }
-    };
-    let channel_after = |column: usize| -> f32 {
-        let (_, right) = extent[&column];
-        match extent.get(&(column + 1)) {
-            Some((next_left, _)) => (right + next_left) * 0.5,
-            None => right + options.margin,
+    // alongside one, where the sockets are. Channel `k` is the gap after
+    // column `k`.
+    let channel = |k: usize| -> Channel {
+        let after = extent.get(&k).map(|(_, right)| *right);
+        let before = extent.get(&(k + 1)).map(|(left, _)| *left);
+        match (after, before) {
+            (Some(right), Some(left)) => Channel {
+                center: (right + left) * 0.5,
+                lo: (right + options.margin).min((right + left) * 0.5),
+                hi: (left - options.margin).max((right + left) * 0.5),
+            },
+            (Some(right), None) => Channel {
+                center: right + options.margin,
+                lo: right + options.margin,
+                hi: right + options.margin * 3.0,
+            },
+            (None, Some(left)) => Channel {
+                center: left - options.margin,
+                lo: left - options.margin * 3.0,
+                hi: left - options.margin,
+            },
+            (None, None) => Channel {
+                center: 0.0,
+                lo: 0.0,
+                hi: 0.0,
+            },
         }
     };
 
@@ -500,8 +513,8 @@ pub fn route_links<N: NodeData>(
         }
         let (lane, gap) = choose_lane(&clear, a.y, b.y);
         route.lane = Some(Lane {
-            exit: channel_after(start),
-            entry: channel_before(end),
+            exit_channel: start,
+            entry_channel: end - 1,
             y: lane,
             gap,
             from: a.y,
@@ -533,22 +546,92 @@ pub fn route_links<N: NodeData>(
         }
     }
 
+    // The height each wire settles on, once fanning has had its say.
+    let height = |r: usize, lane: &Lane| -> f32 {
+        (lane.y + offsets.get(&r).copied().unwrap_or(0.0)).clamp(lane.gap.0, lane.gap.1)
+    };
+
+    // Pass three: wires climbing the same channel each get their own line down
+    // it, the way they each get their own height across. Two wires sharing a
+    // channel would otherwise be drawn one on top of the other.
+    let mut climbs: HashMap<usize, Vec<Climb>> = HashMap::new();
+    for (r, route) in routes.iter().enumerate() {
+        let Some(lane) = &route.lane else {
+            continue;
+        };
+        let y = height(r, lane);
+        let mut claim = |k: usize, a: f32, b: f32, exit: bool, entry: bool| {
+            if (a - b).abs() > 1.0 {
+                climbs.entry(k).or_default().push(Climb {
+                    route: r,
+                    lo: a.min(b),
+                    hi: a.max(b),
+                    exit,
+                    entry,
+                });
+            }
+        };
+        if lane.exit_channel == lane.entry_channel {
+            // One channel does the whole climb, so it needs one line.
+            let lo = lane.from.min(y).min(lane.to);
+            let hi = lane.from.max(y).max(lane.to);
+            claim(lane.exit_channel, lo, hi, true, true);
+        } else {
+            claim(lane.exit_channel, lane.from, y, true, false);
+            claim(lane.entry_channel, y, lane.to, false, true);
+        }
+    }
+
+    let mut lines: HashMap<(usize, bool), f32> = HashMap::new();
+    for (k, sharing) in &mut climbs {
+        let gap = channel(*k);
+        // Innermost first, so wires nest rather than cross on the way down.
+        sharing.sort_by(|a, b| {
+            a.lo.total_cmp(&b.lo)
+                .then(b.hi.total_cmp(&a.hi))
+                .then(a.route.cmp(&b.route))
+        });
+        let last = sharing.len().saturating_sub(1) as f32;
+        // Spread as far as the channel allows, and no further.
+        let step = if last > 0.0 {
+            options.spread.min((gap.hi - gap.lo).max(0.0) / last)
+        } else {
+            0.0
+        };
+        for (i, climb) in sharing.iter().enumerate() {
+            let x = (gap.center + (i as f32 - last * 0.5) * step).clamp(gap.lo, gap.hi);
+            if climb.exit {
+                lines.insert((climb.route, true), x);
+            }
+            if climb.entry {
+                lines.insert((climb.route, false), x);
+            }
+        }
+    }
+
     for (r, route) in routes.into_iter().enumerate() {
         let waypoints = match route.lane {
             None => Vec::new(),
             Some(lane) => {
                 // Fanning must not push a wire back over the nodes the lane
                 // was picked to clear.
-                let y = (lane.y + offsets.get(&r).copied().unwrap_or(0.0))
-                    .clamp(lane.gap.0, lane.gap.1);
+                let y = height(r, &lane);
+                let exit = lines
+                    .get(&(r, true))
+                    .copied()
+                    .unwrap_or_else(|| channel(lane.exit_channel).center);
+                let entry = lines
+                    .get(&(r, false))
+                    .copied()
+                    .unwrap_or_else(|| channel(lane.entry_channel).center);
                 // Climb inside the channels, where there is room, and meet
                 // both sockets level. Dropping to the socket over the last
                 // stretch instead would hook the wire into it sideways.
                 simplify(&[
-                    pos2(lane.exit, lane.from),
-                    pos2(lane.exit, y),
-                    pos2(lane.entry, y),
-                    pos2(lane.entry, lane.to),
+                    pos2(exit, lane.from),
+                    pos2(exit, y),
+                    pos2(entry, y),
+                    pos2(entry, lane.to),
                 ])
             }
         };
@@ -567,8 +650,10 @@ struct Route {
 
 /// The single run a routed wire makes between the channels either side.
 struct Lane {
-    exit: f32,
-    entry: f32,
+    /// The gap after the column the wire starts in.
+    exit_channel: usize,
+    /// The gap before the column it ends in.
+    entry_channel: usize,
     y: f32,
     /// The clear strip `y` sits in, which fanning may not leave.
     gap: (f32, f32),
@@ -582,6 +667,24 @@ struct Lane {
 struct Sharer {
     route: usize,
     want: f32,
+}
+
+/// The clear gap between two columns, where wires change height.
+#[derive(Clone, Copy)]
+struct Channel {
+    center: f32,
+    lo: f32,
+    hi: f32,
+}
+
+/// One wire's climb down a channel, which wants a line of its own.
+struct Climb {
+    route: usize,
+    lo: f32,
+    hi: f32,
+    /// Whether this is the wire's outward channel, its homeward one, or both.
+    exit: bool,
+    entry: bool,
 }
 
 /// The strips of height that clear every node in a column.
