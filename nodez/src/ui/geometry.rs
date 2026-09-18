@@ -584,16 +584,24 @@ pub(crate) fn wire_path(
         unit(run)
     };
 
+    // One reach for the whole wire, so all of its corners turn alike. A
+    // routed wire tracks its waypoints closely — they were chosen to clear
+    // the nodes, and a wide curve between them would undo that — and the
+    // tightest span sets the pace, so a wire that has to turn hard in a
+    // narrow channel does not then loaf into its socket.
+    let pull = (0..points.len() - 1)
+        .map(|i| {
+            let (a, b) = (points[i], points[i + 1]);
+            segment_pull(a, b, style, zoom)
+                .min(viewport_scaled(style.wire_min_curve, zoom))
+                .min((b - a).length() * 0.5)
+        })
+        .fold(f32::INFINITY, f32::min)
+        .max(1.0);
+
     (0..points.len() - 1)
         .map(|i| {
             let (a, b) = (points[i], points[i + 1]);
-            // A routed wire tracks its waypoints closely: they were chosen to
-            // clear the nodes, and a wide curve between them would undo that.
-            // Short spans get a shorter reach again, or the control points
-            // overshoot each other and the wire ties a knot.
-            let pull = segment_pull(a, b, style, zoom)
-                .min(viewport_scaled(style.wire_min_curve, zoom))
-                .min((b - a).length() * 0.5);
             [a, a + tangent(i) * pull, b - tangent(i + 1) * pull, b]
         })
         .collect()
