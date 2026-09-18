@@ -98,12 +98,18 @@ pub enum ScrollMode {
     Zoom,
 }
 
+/// How many bulk moves `Ctrl`+`Z` can walk back.
+const UNDO_DEPTH: usize = 64;
+
 /// What the pointer is currently doing.
 #[derive(Clone, Debug)]
 enum Interaction {
     Idle,
     /// Dragging the selection with the mouse held down.
-    DragNodes { moved: bool },
+    DragNodes {
+        moved: bool,
+        origins: Vec<(NodeId, Pos2)>,
+    },
     /// Blender's `G`: nodes follow the pointer until a click confirms.
     Grab {
         start: Pos2,
@@ -149,6 +155,11 @@ pub struct EditorState {
     /// Remembered across frames because egui smooths a scroll out over several
     /// of them, and only the first carries the originating event.
     scroll_is_trackpad: bool,
+    /// Where nodes were before each of the last few bulk moves.
+    ///
+    /// Positions only: this undoes a drag, a grab or an align, not an edit to
+    /// the graph's contents.
+    position_undo: Vec<Vec<(NodeId, Pos2)>>,
 }
 
 impl Default for EditorState {
@@ -164,6 +175,7 @@ impl Default for EditorState {
             rename_buffer: String::new(),
             raise: None,
             scroll_is_trackpad: false,
+            position_undo: Vec::new(),
         }
     }
 }
@@ -186,6 +198,25 @@ impl EditorState {
     pub fn clear_selection(&mut self) {
         self.selection.clear();
         self.active = None;
+    }
+
+    /// Whether `Ctrl`+`Z` has a move to undo.
+    pub fn can_undo_move(&self) -> bool {
+        !self.position_undo.is_empty()
+    }
+
+    /// Remember where nodes were, so the move about to happen can be undone.
+    ///
+    /// Drops the oldest entry once the stack is full, and ignores an empty
+    /// snapshot so undo never stops on a no-op.
+    fn push_undo(&mut self, origins: Vec<(NodeId, Pos2)>) {
+        if origins.is_empty() {
+            return;
+        }
+        if self.position_undo.len() == UNDO_DEPTH {
+            self.position_undo.remove(0);
+        }
+        self.position_undo.push(origins);
     }
 
     /// Cancel any drag, grab or popup in progress.
@@ -703,9 +734,14 @@ impl NodeEditor {
             if !self.state.is_selected(geom.id) {
                 self.click_node(geom.id, modifiers, actions);
             }
-            self.state.interaction = Interaction::DragNodes { moved: false };
+            // Snapshot now: by the time the drag ends the positions are gone.
+            let origins = self.selection_positions(graph);
+            self.state.interaction = Interaction::DragNodes {
+                moved: false,
+                origins,
+            };
         }
-        if let Interaction::DragNodes { moved } = &mut self.state.interaction
+        if let Interaction::DragNodes { moved, .. } = &mut self.state.interaction
             && response.dragged_by(PointerButton::Primary)
         {
             let delta = response.drag_delta() / zoom;
@@ -720,9 +756,10 @@ impl NodeEditor {
             }
         }
         if response.drag_stopped()
-            && let Interaction::DragNodes { moved } = self.state.interaction
+            && let Interaction::DragNodes { moved, origins } = self.state.interaction.clone()
         {
             if moved {
+                self.state.push_undo(origins);
                 actions.push(EditorAction::NodesMoved(
                     self.state.selection.iter().copied().collect(),
                 ));
@@ -1047,6 +1084,62 @@ impl NodeEditor {
         Rect::from_min_max(pos2(row.left() + label_width + 2.0, row.top()), row.max)
     }
 
+    /// The "Align" submenu. Greyed out until two nodes are selected, since
+    /// lining a single node up with itself does nothing.
+    fn align_menu(&self, ui: &mut Ui, ops: &mut Vec<Op>) {
+        use crate::layout::{Align, Axis, Spacing};
+
+        let enabled = self.state.selection.len() > 1;
+        ui.add_enabled_ui(enabled, |ui| {
+            ui.menu_button("Align", |ui| {
+                for (label, to) in [
+                    ("Left", Align::Left),
+                    ("Center", Align::CenterX),
+                    ("Right", Align::Right),
+                ] {
+                    if ui.button(label).clicked() {
+                        ops.push(Op::AlignSelected(to));
+                        ui.close();
+                    }
+                }
+                ui.separator();
+                for (label, to) in [
+                    ("Top", Align::Top),
+                    ("Middle", Align::CenterY),
+                    ("Bottom", Align::Bottom),
+                ] {
+                    if ui.button(label).clicked() {
+                        ops.push(Op::AlignSelected(to));
+                        ui.close();
+                    }
+                }
+                ui.separator();
+                // Even spacing needs a node between the two it pins.
+                ui.add_enabled_ui(self.state.selection.len() > 2, |ui| {
+                    for (label, axis) in
+                        [("Space across", Axis::X), ("Space down", Axis::Y)]
+                    {
+                        if ui.button(label).clicked() {
+                            ops.push(Op::DistributeSelected(axis, Spacing::Even));
+                            ui.close();
+                        }
+                    }
+                });
+                ui.separator();
+                let options = crate::layout::LayoutOptions::default();
+                for (label, axis, gap) in [
+                    ("Stack across", Axis::X, options.column_gap),
+                    ("Stack down", Axis::Y, options.row_gap),
+                ] {
+                    if ui.button(label).clicked() {
+                        ops.push(Op::DistributeSelected(axis, Spacing::Fixed(gap)));
+                        ui.close();
+                    }
+                }
+            });
+        });
+    }
+
     fn node_context_menu(&mut self, response: &Response, node: NodeId, ops: &mut Vec<Op>) {
         response.context_menu(|ui| {
             if ui.button("Rename\u{2026}").clicked() {
@@ -1066,6 +1159,7 @@ impl NodeEditor {
                 ops.push(Op::ToggleMute(node));
                 ui.close();
             }
+            self.align_menu(ui, ops);
             ui.separator();
             if ui.button("Disconnect all").clicked() {
                 ops.push(Op::DisconnectNode(node));
@@ -1488,17 +1582,13 @@ impl NodeEditor {
                 Key::D if modifiers.shift => ops.push(Op::Duplicate),
                 Key::G if self.state.interaction.is_idle() => {
                     if let Some(p) = pointer {
-                        let origins: Vec<_> = self
-                            .state
-                            .selection
-                            .iter()
-                            .filter_map(|id| graph.node(*id).map(|n| (n.id, n.position)))
-                            .collect();
+                        let origins = self.selection_positions(graph);
                         if !origins.is_empty() {
                             self.state.interaction = Interaction::Grab { start: p, origins };
                         }
                     }
                 }
+                Key::Z if modifiers.command => ops.push(Op::UndoMove),
                 Key::H => ops.push(Op::ToggleCollapseSelected),
                 Key::M => ops.push(Op::ToggleMuteSelected),
                 Key::X | Key::Delete => ops.push(Op::DeleteSelected),
@@ -1548,9 +1638,11 @@ impl NodeEditor {
             }
             self.state.interaction = Interaction::Idle;
         } else if confirm {
+            let origins = origins.clone();
             actions.push(EditorAction::NodesMoved(
                 origins.iter().map(|(id, _)| *id).collect(),
             ));
+            self.state.push_undo(origins);
             self.state.interaction = Interaction::Idle;
         }
     }
@@ -1578,6 +1670,15 @@ impl NodeEditor {
     }
 
     // ------------------------------------------------------------- ops
+
+    /// Where every selected node currently sits.
+    fn selection_positions<N: NodeData>(&self, graph: &Graph<N>) -> Vec<(NodeId, Pos2)> {
+        self.state
+            .selection
+            .iter()
+            .filter_map(|id| graph.node(*id).map(|n| (n.id, n.position)))
+            .collect()
+    }
 
     fn apply<N: NodeData>(
         &mut self,
@@ -1786,6 +1887,43 @@ impl NodeEditor {
                 }
                 false
             }
+            Op::AlignSelected(to) => {
+                let origins = self.selection_positions(graph);
+                let style = &self.style;
+                let moved = crate::layout::align(
+                    graph,
+                    self.state.selection.iter().copied(),
+                    to,
+                    |graph, node| node_size(graph, library, node, style),
+                );
+                self.finish_move(origins, moved, actions)
+            }
+            Op::DistributeSelected(axis, spacing) => {
+                let origins = self.selection_positions(graph);
+                let style = &self.style;
+                let moved = crate::layout::distribute(
+                    graph,
+                    self.state.selection.iter().copied(),
+                    axis,
+                    spacing,
+                    |graph, node| node_size(graph, library, node, style),
+                );
+                self.finish_move(origins, moved, actions)
+            }
+            Op::UndoMove => {
+                let Some(origins) = self.state.position_undo.pop() else {
+                    return false;
+                };
+                for (id, position) in &origins {
+                    if let Some(node) = graph.node_mut(*id) {
+                        node.position = *position;
+                    }
+                }
+                actions.push(EditorAction::NodesMoved(
+                    origins.into_iter().map(|(id, _)| id).collect(),
+                ));
+                false
+            }
             Op::FrameAll => {
                 self.frame(graph, library, None);
                 false
@@ -1796,6 +1934,26 @@ impl NodeEditor {
                 false
             }
         }
+    }
+
+    /// Bank an undo snapshot and report the move, if anything actually moved.
+    ///
+    /// Returns false either way: moving a node is not an edit to the graph's
+    /// contents, which is the same line [`EditorAction::is_edit`] draws.
+    fn finish_move(
+        &mut self,
+        origins: Vec<(NodeId, Pos2)>,
+        moved: Vec<NodeId>,
+        actions: &mut Vec<EditorAction>,
+    ) -> bool {
+        if moved.is_empty() {
+            return false;
+        }
+        // Undo the whole selection, not just the nodes that shifted, so a
+        // second align lands back where the first one started.
+        self.state.push_undo(origins);
+        actions.push(EditorAction::NodesMoved(moved));
+        false
     }
 
     /// Wire a freshly added node to whatever the dropped wire came from.
@@ -1899,6 +2057,9 @@ enum Op {
     ToggleMuteSelected,
     Rename(NodeId, String),
     RestorePositions(Vec<(NodeId, Pos2)>),
+    AlignSelected(crate::layout::Align),
+    DistributeSelected(crate::layout::Axis, crate::layout::Spacing),
+    UndoMove,
     FrameAll,
     FrameSelected,
 }

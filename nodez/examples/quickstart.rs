@@ -132,7 +132,7 @@ fn starting_graph(library: &NodeLibrary) -> Graph {
         graph.connect(library, (from, "out"), (to, socket)).unwrap();
     }
     let _ = nodez::layered(&mut graph, &nodez::LayoutOptions::default(), |graph, node| {
-        nodez::node_size(graph, library, node, &nodez::EditorStyle::default()).y
+        nodez::node_size(graph, library, node, &nodez::EditorStyle::default())
     });
     graph
 }

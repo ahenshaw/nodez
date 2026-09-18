@@ -20,7 +20,7 @@ well-typed. You describe your nodes as Rust structs and the rest is generated.
 
 ```toml
 [dependencies]
-nodez = { version = "0.1", features = ["derive", "app"] }
+nodez = { version = "0.2", features = ["derive", "app"] }
 ```
 
 Four kinds of node that build URLs. This is a whole program:
@@ -247,10 +247,11 @@ its own id, so uncategorised nodes stay distinguishable from each other.
 | `Shift`+`D` | duplicate, keeping the wires between the copies |
 | `X` / `Del` | delete the selection |
 | `H` / `M` | collapse / mute |
+| `Ctrl`+`Z` | undo the last move |
 | `A` / `Alt`+`A` | select all / none |
 | `Home` / `.` | frame everything / the selection |
 | Double-click a header | rename |
-| `RMB` on a node | context menu |
+| `RMB` on a node | context menu, including align and spacing |
 
 ## Reading a graph
 
@@ -277,7 +278,29 @@ graph.can_connect(&library, &from, &to)                   // Err: "Text cannot d
 ```
 
 Graphs serialize with serde, and `Graph::validate` repairs one loaded against a
-library that has since changed. `nodez::layered` arranges a graph built in code.
+library that has since changed.
+
+## Arranging nodes
+
+`nodez::layered` arranges a whole graph into dependency columns — good for one
+built in code, or for tidying up after a load. `align` and `distribute` work on
+a handful of nodes instead, and are what the editor's `RMB` → Align menu calls.
+
+```rust
+nodez::align(&mut graph, editor.state.selection(), nodez::Align::Left, size_of);
+nodez::distribute(&mut graph, ids, nodez::Axis::Y, nodez::Spacing::Even, size_of);
+```
+
+`Spacing::Even` equalizes the gaps and leaves the outermost two nodes where
+they are; `Spacing::Fixed(gap)` stacks everything a set distance apart. Gaps go
+between bounding boxes, so nodes of different heights come out evenly spaced
+rather than evenly staggered. Both return the nodes that actually moved.
+
+All three take a `size_of` closure so they can measure what the editor draws:
+
+```rust
+|graph, node| nodez::node_size(graph, library, node, style)
+```
 
 ## Just the widget
 

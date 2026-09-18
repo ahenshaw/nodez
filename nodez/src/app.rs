@@ -594,7 +594,7 @@ impl<N: NodeData> EditorApp<N> {
                 row_gap: 22.0,
                 ..crate::layout::LayoutOptions::default()
             },
-            |graph, node| node_size(graph, library, node, style).y,
+            |graph, node| node_size(graph, library, node, style),
         );
         match result {
             Ok(()) => {

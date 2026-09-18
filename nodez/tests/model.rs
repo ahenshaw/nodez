@@ -288,6 +288,137 @@ fn validate_repairs_a_graph_against_a_changed_library() {
     assert_eq!(graph.node_count(), 2);
 }
 
+/// Three nodes of deliberately different sizes, placed by hand.
+fn scattered() -> (Fixture, Graph, Vec<nodez::NodeId>, Vec<egui::Vec2>) {
+    let f = fixture();
+    let mut graph = Graph::new();
+    let ids: Vec<_> = [pos2(0.0, 0.0), pos2(40.0, 200.0), pos2(90.0, 500.0)]
+        .into_iter()
+        .map(|p| graph.add_node(&f.library, f.text, p))
+        .collect();
+    // Widths and heights differ, so edge alignment and center alignment
+    // cannot accidentally agree.
+    let sizes = vec![
+        egui::vec2(100.0, 40.0),
+        egui::vec2(200.0, 60.0),
+        egui::vec2(60.0, 100.0),
+    ];
+    (f, graph, ids, sizes)
+}
+
+#[test]
+fn align_lines_a_selection_up() {
+    let (_f, graph, ids, sizes) = scattered();
+    let size_of = {
+        let ids = ids.clone();
+        let sizes = sizes.clone();
+        move |_g: &Graph, node: &nodez::Node| {
+            sizes[ids.iter().position(|id| *id == node.id).unwrap()]
+        }
+    };
+
+    let mut left = graph.clone();
+    nodez::align(&mut left, ids.clone(), nodez::Align::Left, &size_of);
+    assert!(ids.iter().all(|id| left.node(*id).unwrap().position.x == 0.0));
+
+    // Right aligns trailing edges, so each node's x depends on its width.
+    let mut right = graph.clone();
+    nodez::align(&mut right, ids.clone(), nodez::Align::Right, &size_of);
+    for (i, id) in ids.iter().enumerate() {
+        assert_eq!(right.node(*id).unwrap().position.x + sizes[i].x, 240.0);
+    }
+
+    // Centering lines up middles, not edges.
+    let mut center = graph.clone();
+    nodez::align(&mut center, ids.clone(), nodez::Align::CenterX, &size_of);
+    for (i, id) in ids.iter().enumerate() {
+        let node = center.node(*id).unwrap();
+        assert_eq!(node.position.x + sizes[i].x * 0.5, 120.0);
+    }
+
+    // Aligning on x leaves y alone.
+    assert_eq!(left.node(ids[1]).unwrap().position.y, 200.0);
+}
+
+#[test]
+fn align_reports_only_what_moved() {
+    let (_f, mut graph, ids, _sizes) = scattered();
+    // ids[0] is already the leftmost, so a left-align must not claim it moved.
+    let moved = nodez::align(&mut graph, ids.clone(), nodez::Align::Left, |_g, _n| {
+        egui::vec2(100.0, 40.0)
+    });
+    assert_eq!(moved, vec![ids[1], ids[2]]);
+
+    // Running it again is a no-op.
+    let again = nodez::align(&mut graph, ids, nodez::Align::Left, |_g, _n| {
+        egui::vec2(100.0, 40.0)
+    });
+    assert!(again.is_empty());
+}
+
+#[test]
+fn distribute_evens_the_gaps_between_boxes() {
+    let (_f, mut graph, ids, sizes) = scattered();
+    let size_of = {
+        let ids = ids.clone();
+        let sizes = sizes.clone();
+        move |_g: &Graph, node: &nodez::Node| {
+            sizes[ids.iter().position(|id| *id == node.id).unwrap()]
+        }
+    };
+    nodez::distribute(
+        &mut graph,
+        ids.clone(),
+        nodez::Axis::Y,
+        nodez::Spacing::Even,
+        &size_of,
+    );
+
+    // The outermost two stay put; the gaps between boxes come out equal.
+    assert_eq!(graph.node(ids[0]).unwrap().position.y, 0.0);
+    assert_eq!(graph.node(ids[2]).unwrap().position.y + 100.0, 600.0);
+    let gaps: Vec<f32> = ids
+        .windows(2)
+        .map(|w| {
+            let above = graph.node(w[0]).unwrap();
+            let below = graph.node(w[1]).unwrap();
+            let height = sizes[ids.iter().position(|id| *id == w[0]).unwrap()].y;
+            below.position.y - (above.position.y + height)
+        })
+        .collect();
+    assert!(
+        (gaps[0] - gaps[1]).abs() < 0.01,
+        "gaps should match: {gaps:?}"
+    );
+}
+
+#[test]
+fn distribute_with_a_fixed_gap_stacks_from_the_first() {
+    let (_f, mut graph, ids, _sizes) = scattered();
+    nodez::distribute(
+        &mut graph,
+        ids.clone(),
+        nodez::Axis::Y,
+        nodez::Spacing::Fixed(10.0),
+        |_g, _n| egui::vec2(100.0, 40.0),
+    );
+    let y = |id| graph.node(id).unwrap().position.y;
+    assert_eq!(y(ids[0]), 0.0);
+    assert_eq!(y(ids[1]), 50.0);
+    assert_eq!(y(ids[2]), 100.0);
+}
+
+#[test]
+fn aligning_fewer_than_two_nodes_does_nothing() {
+    let (_f, mut graph, ids, _sizes) = scattered();
+    let before = graph.node(ids[0]).unwrap().position;
+    let moved = nodez::align(&mut graph, [ids[0]], nodez::Align::Right, |_g, _n| {
+        egui::vec2(100.0, 40.0)
+    });
+    assert!(moved.is_empty());
+    assert_eq!(graph.node(ids[0]).unwrap().position, before);
+}
+
 #[test]
 fn layered_layout_sorts_into_columns() {
     let f = fixture();
@@ -298,7 +429,10 @@ fn layered_layout_sorts_into_columns() {
     graph.connect(&f.library, (a, "out"), (b, "parts")).unwrap();
     graph.connect(&f.library, (b, "out"), (c, "value")).unwrap();
 
-    nodez::layered(&mut graph, &LayoutOptions::default(), |_graph, _node| 80.0).unwrap();
+    nodez::layered(&mut graph, &LayoutOptions::default(), |_graph, _node| {
+        egui::vec2(160.0, 80.0)
+    })
+    .unwrap();
 
     let x = |id| graph.node(id).unwrap().position.x;
     assert!(x(a) < x(b));

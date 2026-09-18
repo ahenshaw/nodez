@@ -129,7 +129,7 @@ pub fn build(library: &NodeLibrary, style: &EditorStyle) -> Graph {
             origin: pos2(0.0, 0.0),
             sweeps: 6,
         },
-        |graph, node| node_size(graph, library, node, style).y,
+        |graph, node| node_size(graph, library, node, style),
     );
 
     graph

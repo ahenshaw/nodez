@@ -1,10 +1,11 @@
-//! Automatic layout: arrange a graph left-to-right in dependency columns.
+//! Automatic layout: arrange a graph left-to-right in dependency columns, and
+//! tidy up a hand-placed selection with [`align`] and [`distribute`].
 //!
 //! Useful for graphs built in code, or for tidying one up after a load.
 
 use std::collections::HashMap;
 
-use egui::{Pos2, pos2};
+use egui::{Pos2, Vec2, pos2};
 
 use crate::graph::{CycleError, Graph, Node, NodeData, NodeId};
 
@@ -35,14 +36,14 @@ impl Default for LayoutOptions {
 /// Lay the graph out in columns, one per dependency depth, and center each
 /// column vertically.
 ///
-/// `height_of` supplies each node's drawn height. It is handed the graph as
-/// well as the node so it can call [`crate::node_size`], which needs both:
+/// `size_of` supplies each node's drawn size. It is handed the graph as well as
+/// the node so it can call [`crate::node_size`], which needs both:
 ///
 /// ```no_run
 /// # use nodez::{Graph, LayoutOptions, NodeLibrary, EditorStyle, node_size};
 /// # fn demo(graph: &mut Graph, library: &NodeLibrary, style: &EditorStyle) {
 /// nodez::layered(graph, &LayoutOptions::default(), |g, node| {
-///     node_size(g, library, node, style).y
+///     node_size(g, library, node, style)
 /// })
 /// .unwrap();
 /// # }
@@ -50,16 +51,16 @@ impl Default for LayoutOptions {
 pub fn layered<N: NodeData>(
     graph: &mut Graph<N>,
     options: &LayoutOptions,
-    height_of: impl Fn(&Graph<N>, &Node<N>) -> f32,
+    size_of: impl Fn(&Graph<N>, &Node<N>) -> Vec2,
 ) -> Result<(), CycleError> {
     let depths = graph.depths()?;
     if depths.is_empty() {
         return Ok(());
     }
     // Measure everything before mutating any positions.
-    let heights_by_id: HashMap<NodeId, f32> = graph
+    let sizes: HashMap<NodeId, Vec2> = graph
         .nodes()
-        .map(|node| (node.id, height_of(graph, node)))
+        .map(|node| (node.id, size_of(graph, node)))
         .collect();
 
     let column_count = depths.values().copied().max().unwrap_or(0) + 1;
@@ -75,15 +76,16 @@ pub fn layered<N: NodeData>(
         order_by_barycenter(graph, &mut columns, false);
     }
 
-    // Column widths come from the nodes themselves, so wide nodes get room.
+    // Column widths come from the measured sizes, so wide nodes get room and a
+    // collapsed one only takes the width it is drawn at.
     let mut column_x = Vec::with_capacity(column_count);
     let mut x = options.origin.x;
     for column in &columns {
         column_x.push(x);
         let width = column
             .iter()
-            .filter_map(|id| graph.node(*id))
-            .map(|n| n.width)
+            .filter_map(|id| sizes.get(id))
+            .map(|size| size.x)
             .fold(0.0_f32, f32::max);
         x += width + options.column_gap;
     }
@@ -93,7 +95,7 @@ pub fn layered<N: NodeData>(
     for column in &columns {
         let hs: Vec<f32> = column
             .iter()
-            .filter_map(|id| heights_by_id.get(id).copied())
+            .filter_map(|id| sizes.get(id).map(|size| size.y))
             .collect();
         let total =
             hs.iter().sum::<f32>() + options.row_gap * (hs.len().saturating_sub(1)) as f32;
@@ -161,4 +163,186 @@ fn order_by_barycenter<N: NodeData>(
         scored.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
         columns[c] = scored.into_iter().map(|(_, id)| id).collect();
     }
+}
+
+/// Which edge or axis a selection lines up on, for [`align`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Align {
+    Left,
+    Right,
+    Top,
+    Bottom,
+    /// Line the vertical center lines up.
+    CenterX,
+    /// Line the horizontal center lines up.
+    CenterY,
+}
+
+impl Align {
+    /// Whether this alignment moves nodes horizontally.
+    fn is_horizontal(self) -> bool {
+        matches!(self, Self::Left | Self::Right | Self::CenterX)
+    }
+}
+
+/// Which way [`distribute`] spreads nodes out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Axis {
+    X,
+    Y,
+}
+
+/// How much room [`distribute`] leaves between nodes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Spacing {
+    /// Equal gaps, with the two outermost nodes left where they are.
+    Even,
+    /// A fixed gap, growing from the first node along the axis.
+    Fixed(f32),
+}
+
+/// Line a selection up on one edge, or on its center line.
+///
+/// The target comes from the bounding box of `nodes`, so aligning left moves
+/// everything to the leftmost node's edge. Returns the nodes that actually
+/// moved, which is what [`crate::EditorAction::NodesMoved`] wants.
+///
+/// `size_of` measures each node, as it does for [`layered`]. Only `Right`,
+/// `Bottom` and the centers consult it; the other edges are the position
+/// itself.
+pub fn align<N: NodeData>(
+    graph: &mut Graph<N>,
+    nodes: impl IntoIterator<Item = NodeId>,
+    to: Align,
+    size_of: impl Fn(&Graph<N>, &Node<N>) -> Vec2,
+) -> Vec<NodeId> {
+    let measured = measure(graph, nodes, size_of);
+    if measured.len() < 2 {
+        return Vec::new();
+    }
+
+    // One number to line everything up on, read off the selection's bounds.
+    let edge = match to {
+        Align::Left => min_by(&measured, |p, _| p.x),
+        Align::Top => min_by(&measured, |p, _| p.y),
+        Align::Right => max_by(&measured, |p, s| p.x + s.x),
+        Align::Bottom => max_by(&measured, |p, s| p.y + s.y),
+        Align::CenterX => {
+            (min_by(&measured, |p, _| p.x) + max_by(&measured, |p, s| p.x + s.x)) * 0.5
+        }
+        Align::CenterY => {
+            (min_by(&measured, |p, _| p.y) + max_by(&measured, |p, s| p.y + s.y)) * 0.5
+        }
+    };
+
+    let mut moved = Vec::new();
+    for (id, position, size) in measured {
+        let target = match to {
+            Align::Left | Align::Top => edge,
+            Align::Right => edge - size.x,
+            Align::Bottom => edge - size.y,
+            Align::CenterX => edge - size.x * 0.5,
+            Align::CenterY => edge - size.y * 0.5,
+        };
+        let mut next = position;
+        if to.is_horizontal() {
+            next.x = target;
+        } else {
+            next.y = target;
+        }
+        if next != position
+            && let Some(node) = graph.node_mut(id)
+        {
+            node.position = next;
+            moved.push(id);
+        }
+    }
+    moved
+}
+
+/// Spread a selection out along one axis.
+///
+/// Gaps are measured between bounding boxes, not between centers, so nodes of
+/// different heights end up evenly spaced rather than evenly staggered.
+/// Returns the nodes that actually moved.
+pub fn distribute<N: NodeData>(
+    graph: &mut Graph<N>,
+    nodes: impl IntoIterator<Item = NodeId>,
+    axis: Axis,
+    spacing: Spacing,
+    size_of: impl Fn(&Graph<N>, &Node<N>) -> Vec2,
+) -> Vec<NodeId> {
+    let mut measured = measure(graph, nodes, size_of);
+    if measured.len() < 2 {
+        return Vec::new();
+    }
+    let extent = |size: Vec2| match axis {
+        Axis::X => size.x,
+        Axis::Y => size.y,
+    };
+    let leading = |position: Pos2| match axis {
+        Axis::X => position.x,
+        Axis::Y => position.y,
+    };
+    // Order by where they already are, so nobody jumps past a neighbor.
+    measured.sort_by(|a, b| leading(a.1).total_cmp(&leading(b.1)).then(a.0.cmp(&b.0)));
+
+    let gap = match spacing {
+        Spacing::Fixed(gap) => gap,
+        Spacing::Even => {
+            // Pin the outermost two and share out what is left between them.
+            let first = &measured[0];
+            let last = &measured[measured.len() - 1];
+            let span = (leading(last.1) + extent(last.2)) - leading(first.1);
+            let filled: f32 = measured.iter().map(|(_, _, size)| extent(*size)).sum();
+            (span - filled) / (measured.len() - 1) as f32
+        }
+    };
+
+    let mut moved = Vec::new();
+    let mut cursor = leading(measured[0].1);
+    for (id, position, size) in measured {
+        let mut next = position;
+        match axis {
+            Axis::X => next.x = cursor,
+            Axis::Y => next.y = cursor,
+        }
+        cursor += extent(size) + gap;
+        if next != position
+            && let Some(node) = graph.node_mut(id)
+        {
+            node.position = next;
+            moved.push(id);
+        }
+    }
+    moved
+}
+
+/// Collect the position and drawn size of each node that still exists.
+fn measure<N: NodeData>(
+    graph: &Graph<N>,
+    nodes: impl IntoIterator<Item = NodeId>,
+    size_of: impl Fn(&Graph<N>, &Node<N>) -> Vec2,
+) -> Vec<(NodeId, Pos2, Vec2)> {
+    let mut seen = std::collections::HashSet::new();
+    nodes
+        .into_iter()
+        .filter(|id| seen.insert(*id))
+        .filter_map(|id| graph.node(id))
+        .map(|node| (node.id, node.position, size_of(graph, node)))
+        .collect()
+}
+
+fn min_by(measured: &[(NodeId, Pos2, Vec2)], f: impl Fn(Pos2, Vec2) -> f32) -> f32 {
+    measured
+        .iter()
+        .map(|(_, p, s)| f(*p, *s))
+        .fold(f32::INFINITY, f32::min)
+}
+
+fn max_by(measured: &[(NodeId, Pos2, Vec2)], f: impl Fn(Pos2, Vec2) -> f32) -> f32 {
+    measured
+        .iter()
+        .map(|(_, p, s)| f(*p, *s))
+        .fold(f32::NEG_INFINITY, f32::max)
 }
