@@ -323,8 +323,9 @@ nodez::route_links(&mut graph, &RouteOptions::default(), size_of, anchor_of)?;
 ```
 
 A wire whose own curve already clears everything in its way is left alone, so
-simple graphs keep their plain noodles. Anything else is pinned into the clear
-channels between columns and threaded through a gap in each column it crosses.
+simple graphs keep their plain noodles. Anything else crosses every column in
+its way at a single height, picked clear of all of them and, where it can be,
+level with one end — so a routed wire bends twice at most, and often once.
 
 It writes `Connection::waypoints`, points the wire bends through. Those are
 only how the wire is drawn: traversal, evaluation and the config you generate

@@ -459,8 +459,7 @@ pub fn route_links<N: NodeData>(
     for (id, from, to) in links {
         let mut route = Route {
             link: id,
-            ends: None,
-            crossings: Vec::new(),
+            lane: None,
         };
         let (Some(&start), Some(&end)) = (depths.get(&from.node), depths.get(&to.node)) else {
             routes.push(route);
@@ -489,67 +488,59 @@ pub fn route_links<N: NodeData>(
             continue;
         }
 
-        route.ends = Some((channel_after(start), a.y, channel_before(end), b.y));
+        // One height clear of every column in the way, so the wire crosses
+        // them all in a single run instead of stepping between lanes.
+        let mut clear = vec![(f32::NEG_INFINITY, f32::INFINITY)];
         for column in start + 1..end {
-            let Some(rects) = columns.get(&column) else {
-                continue;
-            };
-            // Where the wire would like to be by the time it gets here.
-            let t = (column - start) as f32 / (end - start) as f32;
-            let want = a.y + (b.y - a.y) * t;
-            route.crossings.push(Crossing {
-                column,
-                lane: nearest_lane(rects, want, options),
-                want,
-            });
+            if let Some(rects) = columns.get(&column) {
+                clear = intersect(&clear, &clear_intervals(rects, options));
+            }
         }
+        let (lane, gap) = choose_lane(&clear, a.y, b.y);
+        route.lane = Some(Lane {
+            exit: channel_after(start),
+            entry: channel_before(end),
+            y: lane,
+            gap,
+            from: a.y,
+        });
         routes.push(route);
     }
 
-    // Pass two: fan the wires that chose the same lane, ordered by where each
-    // was heading, so a bundle neither overlaps nor crosses itself.
-    let mut lanes: HashMap<(usize, i32), Vec<Sharer>> = HashMap::new();
+    // Pass two: fan the wires that chose the same height, ordered by where
+    // each was heading, so a bundle neither overlaps nor crosses itself.
+    let mut shared: HashMap<i32, Vec<Sharer>> = HashMap::new();
     for (r, route) in routes.iter().enumerate() {
-        for (c, crossing) in route.crossings.iter().enumerate() {
-            lanes
-                .entry((crossing.column, (crossing.lane.center / 4.0).round() as i32))
+        if let Some(lane) = &route.lane {
+            shared
+                .entry((lane.y / 4.0).round() as i32)
                 .or_default()
                 .push(Sharer {
                     route: r,
-                    crossing: c,
-                    want: crossing.want,
+                    want: lane.from,
                 });
         }
     }
-    let mut offsets: HashMap<(usize, usize), f32> = HashMap::new();
-    for sharers in lanes.values_mut() {
+    let mut offsets: HashMap<usize, f32> = HashMap::new();
+    for sharers in shared.values_mut() {
         sharers.sort_by(|a, b| a.want.total_cmp(&b.want).then(a.route.cmp(&b.route)));
         let last = sharers.len().saturating_sub(1) as f32;
         for (k, sharer) in sharers.iter().enumerate() {
-            offsets.insert(
-                (sharer.route, sharer.crossing),
-                (k as f32 - last * 0.5) * options.spread,
-            );
+            offsets.insert(sharer.route, (k as f32 - last * 0.5) * options.spread);
         }
     }
 
     for (r, route) in routes.into_iter().enumerate() {
-        let mut waypoints = Vec::new();
-        if let Some((exit_x, exit_y, entry_x, entry_y)) = route.ends {
-            // Pin the wire into the channel at the height it leaves, so its
-            // curve cannot bulge back over the column it just left.
-            waypoints.push(pos2(exit_x, exit_y));
-            for (c, crossing) in route.crossings.iter().enumerate() {
-                let offset = offsets.get(&(r, c)).copied().unwrap_or(0.0);
-                // The fan must not push a wire out of the gap it chose.
-                let y = crossing.lane.clamp(crossing.lane.center + offset);
-                // Enter and leave at the same height, so the wire runs flat
-                // past the column rather than dipping through it.
-                waypoints.push(pos2(channel_before(crossing.column), y));
-                waypoints.push(pos2(channel_after(crossing.column), y));
+        let waypoints = match route.lane {
+            None => Vec::new(),
+            Some(lane) => {
+                // Fanning must not push a wire back over the nodes the lane
+                // was picked to clear.
+                let y = (lane.y + offsets.get(&r).copied().unwrap_or(0.0))
+                    .clamp(lane.gap.0, lane.gap.1);
+                vec![pos2(lane.exit, y), pos2(lane.entry, y)]
             }
-            waypoints.push(pos2(entry_x, entry_y));
-        }
+        };
         if let Some(conn) = graph.connection_mut(route.link) {
             conn.waypoints = waypoints;
         }
@@ -557,43 +548,86 @@ pub fn route_links<N: NodeData>(
     Ok(())
 }
 
-/// One wire's plan.
+/// One wire's plan: nothing, or the one height it crosses everything at.
 struct Route {
     link: ConnectionId,
-    /// Where it enters and leaves the channels either side, when it is routed.
-    ends: Option<(f32, f32, f32, f32)>,
-    crossings: Vec<Crossing>,
+    lane: Option<Lane>,
 }
 
-/// A column a wire crosses, and the lane it picked there.
-struct Crossing {
-    column: usize,
-    lane: Lane,
-    /// Where the wire was heading, which orders it within a shared lane.
-    want: f32,
+/// The single run a routed wire makes between the channels either side.
+struct Lane {
+    exit: f32,
+    entry: f32,
+    y: f32,
+    /// The clear strip `y` sits in, which fanning may not leave.
+    gap: (f32, f32),
+    /// The height the wire starts at, which orders a shared lane.
+    from: f32,
 }
 
-/// One wire's claim on a lane another wire also wants.
+/// One wire's claim on a height another wire also wants.
 struct Sharer {
     route: usize,
-    crossing: usize,
     want: f32,
 }
 
-/// A clear horizontal strip through a column.
-#[derive(Clone, Copy)]
-struct Lane {
-    center: f32,
-    top: f32,
-    bottom: f32,
+/// The strips of height that clear every node in a column.
+fn clear_intervals(rects: &[Rect], options: &RouteOptions) -> Vec<(f32, f32)> {
+    let mut out = Vec::with_capacity(rects.len() + 1);
+    let mut cursor = f32::NEG_INFINITY;
+    for rect in rects {
+        let top = rect.top() - options.margin;
+        if top > cursor {
+            out.push((cursor, top));
+        }
+        cursor = cursor.max(rect.bottom() + options.margin);
+    }
+    out.push((cursor, f32::INFINITY));
+    out
 }
 
-impl Lane {
-    /// Keep a fanned wire inside the gap, so spreading a bundle never pushes
-    /// its outermost wires back over a node.
-    fn clamp(&self, y: f32) -> f32 {
-        y.clamp(self.top, self.bottom)
+/// The strips clear in both of two columns.
+fn intersect(a: &[(f32, f32)], b: &[(f32, f32)]) -> Vec<(f32, f32)> {
+    let (mut i, mut j) = (0, 0);
+    let mut out = Vec::new();
+    while i < a.len() && j < b.len() {
+        let lo = a[i].0.max(b[j].0);
+        let hi = a[i].1.min(b[j].1);
+        if hi > lo {
+            out.push((lo, hi));
+        }
+        if a[i].1 < b[j].1 {
+            i += 1;
+        } else {
+            j += 1;
+        }
     }
+    out
+}
+
+/// The clear height that costs the wire the least climbing.
+///
+/// A height level with either end is worth most: the wire then leaves or
+/// arrives flat, and that bend disappears entirely.
+fn choose_lane(intervals: &[(f32, f32)], from: f32, to: f32) -> (f32, (f32, f32)) {
+    let (low, high) = (from.min(to), from.max(to));
+    let mut best: Option<(f32, f32, (f32, f32))> = None;
+    for &(lo, hi) in intervals {
+        // The point in this strip needing the least detour from the straight
+        // run between the two ends.
+        let y = if hi < low {
+            hi
+        } else if lo > high {
+            lo
+        } else {
+            from.clamp(lo.max(low), hi.min(high))
+        };
+        let cost = (y - from).abs() + (y - to).abs();
+        if best.as_ref().is_none_or(|(c, _, _)| cost < *c) {
+            best = Some((cost, y, (lo, hi)));
+        }
+    }
+    best.map_or((from, (from, from)), |(_, y, gap)| (y, gap))
 }
 
 /// Whether the curve the editor would draw between two sockets already clears
@@ -620,47 +654,4 @@ fn cubic(points: &[Pos2; 4], t: f32) -> Pos2 {
         a * points[0].x + b * points[1].x + c * points[2].x + d * points[3].x,
         a * points[0].y + b * points[1].y + c * points[2].y + d * points[3].y,
     )
-}
-
-/// The clear horizontal lane through a column that sits closest to `want`.
-///
-/// Candidates are the gaps between the column's nodes, plus the open space
-/// above the first and below the last.
-fn nearest_lane(rects: &[Rect], want: f32, options: &RouteOptions) -> Lane {
-    let mut lanes: Vec<Lane> = Vec::with_capacity(rects.len() + 1);
-    if let Some(first) = rects.first() {
-        let edge = first.top() - options.margin;
-        lanes.push(Lane {
-            center: edge,
-            top: edge - options.max_curve,
-            bottom: edge,
-        });
-    }
-    for pair in rects.windows(2) {
-        let (top, bottom) = (pair[0].bottom() + options.margin, pair[1].top() - options.margin);
-        if bottom - top >= 0.0 && pair[1].top() - pair[0].bottom() >= options.min_lane {
-            lanes.push(Lane {
-                center: (top + bottom) * 0.5,
-                top,
-                bottom,
-            });
-        }
-    }
-    if let Some(last) = rects.last() {
-        let edge = last.bottom() + options.margin;
-        lanes.push(Lane {
-            center: edge,
-            top: edge,
-            bottom: edge + options.max_curve,
-        });
-    }
-
-    lanes
-        .into_iter()
-        .min_by(|a, b| (a.center - want).abs().total_cmp(&(b.center - want).abs()))
-        .unwrap_or(Lane {
-            center: want,
-            top: want,
-            bottom: want,
-        })
 }

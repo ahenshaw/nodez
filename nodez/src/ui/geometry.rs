@@ -565,16 +565,23 @@ pub(crate) fn wire_path(
     points.extend_from_slice(waypoints);
     points.push(to);
 
+    // At a bend, split the difference between the way the wire arrives and
+    // the way it leaves. Taking the chord across the whole corner instead
+    // would point nearly straight along the run, and a wire dropping into a
+    // narrow channel would hook rather than turn.
     let tangent = |i: usize| -> Vec2 {
         if i == 0 || i + 1 == points.len() {
             return vec2(1.0, 0.0);
         }
-        let run = points[i + 1] - points[i - 1];
-        if run.length_sq() < 1.0 {
-            vec2(1.0, 0.0)
-        } else {
-            run.normalized()
-        }
+        let unit = |v: Vec2| {
+            if v.length_sq() < 1.0 {
+                vec2(1.0, 0.0)
+            } else {
+                v.normalized()
+            }
+        };
+        let run = unit(points[i] - points[i - 1]) + unit(points[i + 1] - points[i]);
+        unit(run)
     };
 
     (0..points.len() - 1)
@@ -729,5 +736,42 @@ mod tests {
             crossings.len(),
             &crossings[..crossings.len().min(4)]
         );
+    }
+
+    #[test]
+    fn a_routed_wire_bends_at_most_twice() {
+        let (library, mut graph) = crowded();
+        let style = EditorStyle::default();
+        let size = |g: &crate::Graph, n: &crate::Node| node_size(g, &library, n, &style);
+
+        crate::layout::layered(&mut graph, &LayoutOptions::default(), size).unwrap();
+        crate::layout::route_links(
+            &mut graph,
+            &RouteOptions::default(),
+            size,
+            |g, socket, kind| {
+                let node = g.node(socket.node)?;
+                socket_anchor(g, &library, node, &style, kind, &socket.socket)
+            },
+        )
+        .unwrap();
+
+        let routed = graph
+            .connections()
+            .filter(|c| !c.waypoints.is_empty())
+            .count();
+        assert!(routed > 0, "this graph needs routing, or the test proves nothing");
+        for conn in graph.connections() {
+            assert!(
+                conn.waypoints.len() <= 2,
+                "{:?} bends {} times; one run across should need two",
+                conn.id,
+                conn.waypoints.len()
+            );
+            // A stair between lanes is what the extra bends used to be.
+            if let [first, last] = conn.waypoints[..] {
+                assert_eq!(first.y, last.y, "{:?} steps instead of running flat", conn.id);
+            }
+        }
     }
 }
