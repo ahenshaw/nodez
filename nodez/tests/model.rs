@@ -441,7 +441,7 @@ fn spanning() -> (Fixture, Graph, Vec<nodez::NodeId>) {
 fn routing_bends_only_the_wires_that_span_columns() {
     let (_f, mut graph, ids) = spanning();
     let size = |_: &Graph, _: &nodez::Node| egui::vec2(120.0, 60.0);
-    let anchors = |_: &Graph, _: &nodez::SocketRef, _: nodez::SocketKind| None;
+    let anchors = |_: &Graph, _: &nodez::SocketRef, _: nodez::SocketKind, _: Option<u32>| None;
     nodez::route_links(&mut graph, &nodez::RouteOptions::default(), size, anchors).unwrap();
 
     // Neighbor-to-neighbor wires have a clear channel already.
@@ -470,7 +470,7 @@ fn routing_bends_only_the_wires_that_span_columns() {
 fn a_routed_wire_clears_the_nodes_it_passes() {
     let (_f, mut graph, ids) = spanning();
     let size = |_: &Graph, _: &nodez::Node| egui::vec2(120.0, 60.0);
-    let anchors = |_: &Graph, _: &nodez::SocketRef, _: nodez::SocketKind| None;
+    let anchors = |_: &Graph, _: &nodez::SocketRef, _: nodez::SocketKind, _: Option<u32>| None;
     nodez::route_links(&mut graph, &nodez::RouteOptions::default(), size, anchors).unwrap();
 
     let blockers: Vec<egui::Rect> = [ids[1], ids[2]]
@@ -492,7 +492,7 @@ fn a_routed_wire_clears_the_nodes_it_passes() {
 fn routing_can_be_undone() {
     let (_f, mut graph, _ids) = spanning();
     let size = |_: &Graph, _: &nodez::Node| egui::vec2(120.0, 60.0);
-    let anchors = |_: &Graph, _: &nodez::SocketRef, _: nodez::SocketKind| None;
+    let anchors = |_: &Graph, _: &nodez::SocketRef, _: nodez::SocketKind, _: Option<u32>| None;
     nodez::route_links(&mut graph, &nodez::RouteOptions::default(), size, anchors).unwrap();
     assert!(graph.connections().any(|c| !c.waypoints.is_empty()));
 
@@ -507,7 +507,7 @@ fn routing_can_be_undone() {
 fn routing_is_idempotent() {
     let (_f, mut graph, _ids) = spanning();
     let size = |_: &Graph, _: &nodez::Node| egui::vec2(120.0, 60.0);
-    let anchors = |_: &Graph, _: &nodez::SocketRef, _: nodez::SocketKind| None;
+    let anchors = |_: &Graph, _: &nodez::SocketRef, _: nodez::SocketKind, _: Option<u32>| None;
     nodez::route_links(&mut graph, &nodez::RouteOptions::default(), size, anchors).unwrap();
     let once: Vec<_> = graph.connections().map(|c| c.waypoints.clone()).collect();
     nodez::route_links(&mut graph, &nodez::RouteOptions::default(), size, anchors).unwrap();

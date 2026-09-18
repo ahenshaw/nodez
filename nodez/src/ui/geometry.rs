@@ -251,6 +251,10 @@ fn collapsed_width(width: f32, style: &EditorStyle) -> f32 {
 ///
 /// Routing needs this rather than the node's edge: a wire leaves a socket, and
 /// on a tall node the difference is most of its height.
+///
+/// `slot` picks the attachment point on a multi-input, which is the link's
+/// [`crate::Connection::order`]. Passing `None` takes the first, which is only
+/// right for an output or a single-link input.
 pub fn socket_anchor<N: NodeData>(
     graph: &Graph<N>,
     library: &NodeLibrary,
@@ -258,6 +262,7 @@ pub fn socket_anchor<N: NodeData>(
     style: &EditorStyle,
     kind: SocketKind,
     socket: &str,
+    slot: Option<u32>,
 ) -> Option<Pos2> {
     // An identity viewport leaves the geometry in graph space.
     let viewport = Viewport {
@@ -265,9 +270,12 @@ pub fn socket_anchor<N: NodeData>(
         pan: Vec2::ZERO,
         zoom: 1.0,
     };
-    node_geometry(graph, library, node, style, &viewport)
-        .socket_named(kind, socket)
-        .map(|socket| socket.center)
+    let geometry = node_geometry(graph, library, node, style, &viewport);
+    match slot {
+        Some(slot) => geometry.socket_slot(kind, socket, slot),
+        None => geometry.socket_named(kind, socket),
+    }
+    .map(|socket| socket.center)
 }
 
 pub(crate) fn node_geometry<N: NodeData>(
@@ -717,9 +725,9 @@ mod tests {
                 ..RouteOptions::default()
             },
             size,
-            |g, socket, kind| {
+            |g, socket, kind, slot| {
                 let node = g.node(socket.node)?;
-                socket_anchor(g, &library, node, &style, kind, &socket.socket)
+                socket_anchor(g, &library, node, &style, kind, &socket.socket, slot)
             },
         )
         .unwrap();
@@ -734,9 +742,9 @@ mod tests {
             let from_node = graph.node(conn.from.node).unwrap();
             let to_node = graph.node(conn.to.node).unwrap();
             let a = socket_anchor(&graph, &library, from_node, &style, SocketKind::Output,
-                &conn.from.socket).unwrap();
+                &conn.from.socket, None).unwrap();
             let b = socket_anchor(&graph, &library, to_node, &style, SocketKind::Input,
-                &conn.to.socket).unwrap();
+                &conn.to.socket, Some(conn.order)).unwrap();
 
             // The path exactly as the editor draws it, at zoom 1.
             for points in wire_path(a, b, &conn.waypoints, &style, 1.0) {
@@ -773,9 +781,9 @@ mod tests {
             &mut graph,
             &RouteOptions::default(),
             size,
-            |g, socket, kind| {
+            |g, socket, kind, slot| {
                 let node = g.node(socket.node)?;
-                socket_anchor(g, &library, node, &style, kind, &socket.socket)
+                socket_anchor(g, &library, node, &style, kind, &socket.socket, slot)
             },
         )
         .unwrap();
@@ -788,9 +796,9 @@ mod tests {
             let from_node = graph.node(conn.from.node).unwrap();
             let to_node = graph.node(conn.to.node).unwrap();
             let a = socket_anchor(&graph, &library, from_node, &style, SocketKind::Output,
-                &conn.from.socket).unwrap();
+                &conn.from.socket, None).unwrap();
             let b = socket_anchor(&graph, &library, to_node, &style, SocketKind::Input,
-                &conn.to.socket).unwrap();
+                &conn.to.socket, Some(conn.order)).unwrap();
 
             let mut hull = Rect::from_points(&[a, b]);
             for p in &conn.waypoints {
@@ -812,6 +820,51 @@ mod tests {
         assert!(checked > 0, "no wire was routed, so this proves nothing");
     }
 
+    /// The router has to aim at the attachment point the wire is drawn to. On
+    /// a multi-input those differ per link, and aiming at the first of them
+    /// leaves every other wire a stray diagonal to cover at the end.
+    #[test]
+    fn routing_meets_a_multi_input_at_the_slot_the_wire_uses() {
+        let (library, mut graph) = crowded();
+        let style = EditorStyle::default();
+        let size = |g: &crate::Graph, n: &crate::Node| node_size(g, &library, n, &style);
+
+        crate::layout::layered(&mut graph, &LayoutOptions::default(), size).unwrap();
+        crate::layout::route_links(
+            &mut graph,
+            &RouteOptions::default(),
+            size,
+            |g, socket, kind, slot| {
+                let node = g.node(socket.node)?;
+                socket_anchor(g, &library, node, &style, kind, &socket.socket, slot)
+            },
+        )
+        .unwrap();
+
+        let mut checked = 0;
+        for conn in graph.connections() {
+            let Some(last) = conn.waypoints.last() else {
+                continue;
+            };
+            // Where the editor will actually draw this wire's end.
+            let to_node = graph.node(conn.to.node).unwrap();
+            let target = socket_anchor(&graph, &library, to_node, &style, SocketKind::Input,
+                &conn.to.socket, Some(conn.order)).unwrap();
+            assert!(
+                (last.y - target.y).abs() < 0.01,
+                "{:?} on slot {} is routed to y {} but drawn to y {}",
+                conn.id,
+                conn.order,
+                last.y,
+                target.y
+            );
+            if conn.order > 0 {
+                checked += 1;
+            }
+        }
+        assert!(checked > 0, "no wire past the first slot was routed");
+    }
+
     #[test]
     fn a_routed_wire_crosses_at_one_height() {
         let (library, mut graph) = crowded();
@@ -823,9 +876,9 @@ mod tests {
             &mut graph,
             &RouteOptions::default(),
             size,
-            |g, socket, kind| {
+            |g, socket, kind, slot| {
                 let node = g.node(socket.node)?;
-                socket_anchor(g, &library, node, &style, kind, &socket.socket)
+                socket_anchor(g, &library, node, &style, kind, &socket.socket, slot)
             },
         )
         .unwrap();

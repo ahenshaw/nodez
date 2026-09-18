@@ -635,9 +635,9 @@ impl<N: NodeData> EditorApp<N> {
                 ..crate::layout::RouteOptions::default()
             },
             |graph, node| node_size(graph, library, node, style),
-            |graph, socket, kind| {
+            |graph, socket, kind, slot| {
                 let node = graph.node(socket.node)?;
-                crate::socket_anchor(graph, library, node, style, kind, &socket.socket)
+                crate::socket_anchor(graph, library, node, style, kind, &socket.socket, slot)
             },
         );
     }

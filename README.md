@@ -316,11 +316,15 @@ nodez::route_links(&mut graph, &RouteOptions::default(), size_of, anchor_of)?;
 `anchor_of` says where a wire attaches, which `socket_anchor` answers:
 
 ```rust
-|graph, socket, kind| {
+|graph, socket, kind, slot| {
     let node = graph.node(socket.node)?;
-    nodez::socket_anchor(graph, library, node, style, kind, &socket.socket)
+    nodez::socket_anchor(graph, library, node, style, kind, &socket.socket, slot)
 }
 ```
+
+`slot` is the link's `order`, which is what picks the attachment point on a
+multi-input. Ignore it and every wire past the first is routed to the wrong
+one.
 
 A wire whose own curve already clears everything in its way is left alone, so
 simple graphs keep their plain noodles. Anything else crosses every column in

@@ -392,7 +392,9 @@ impl Default for RouteOptions {
 ///
 /// `anchor_of` gives a socket's position in graph space — [`crate::socket_anchor`]
 /// supplies it. Without it the router aims at the middle of a node's edge, and
-/// on a tall node that is nowhere near where the wire actually attaches.
+/// on a tall node that is nowhere near where the wire actually attaches. It is
+/// handed the slot a link lands on, so a multi-input is routed to the
+/// attachment point the wire really uses rather than to the first of them.
 ///
 /// Only [`crate::Connection::waypoints`] changes, so nothing about traversal
 /// or evaluation is affected.
@@ -400,7 +402,7 @@ pub fn route_links<N: NodeData>(
     graph: &mut Graph<N>,
     options: &RouteOptions,
     size_of: impl Fn(&Graph<N>, &Node<N>) -> Vec2,
-    anchor_of: impl Fn(&Graph<N>, &SocketRef, SocketKind) -> Option<Pos2>,
+    anchor_of: impl Fn(&Graph<N>, &SocketRef, SocketKind, Option<u32>) -> Option<Pos2>,
 ) -> Result<(), CycleError> {
     let depths = graph.depths()?;
     if depths.is_empty() {
@@ -450,13 +452,13 @@ pub fn route_links<N: NodeData>(
 
     let mut links: Vec<_> = graph
         .connections()
-        .map(|c| (c.id, c.from.clone(), c.to.clone()))
+        .map(|c| (c.id, c.from.clone(), c.to.clone(), c.order))
         .collect();
-    links.sort_by_key(|(id, _, _)| id.0);
+    links.sort_by_key(|(id, _, _, _)| id.0);
 
     // Pass one: decide what each wire needs.
     let mut routes: Vec<Route> = Vec::new();
-    for (id, from, to) in links {
+    for (id, from, to, slot) in links {
         let mut route = Route {
             link: id,
             lane: None,
@@ -472,9 +474,9 @@ pub fn route_links<N: NodeData>(
         };
 
         // Where the wire really leaves and arrives.
-        let a = anchor_of(graph, &from, SocketKind::Output)
+        let a = anchor_of(graph, &from, SocketKind::Output, None)
             .unwrap_or_else(|| pos2(from_rect.right(), from_rect.center().y));
-        let b = anchor_of(graph, &to, SocketKind::Input)
+        let b = anchor_of(graph, &to, SocketKind::Input, Some(slot))
             .unwrap_or_else(|| pos2(to_rect.left(), to_rect.center().y));
 
         // Everything this wire could run into.
