@@ -584,25 +584,31 @@ pub(crate) fn wire_path(
         unit(run)
     };
 
-    // One reach for the whole wire, so all of its corners turn alike. A
-    // routed wire tracks its waypoints closely — they were chosen to clear
-    // the nodes, and a wide curve between them would undo that — and the
-    // tightest span sets the pace, so a wire that has to turn hard in a
-    // narrow channel does not then loaf into its socket.
-    let pull = (0..points.len() - 1)
-        .map(|i| {
-            let (a, b) = (points[i], points[i + 1]);
-            segment_pull(a, b, style, zoom)
-                .min(viewport_scaled(style.wire_min_curve, zoom))
-                .min((b - a).length() * 0.5)
-        })
-        .fold(f32::INFINITY, f32::min)
-        .max(1.0);
+    // Each corner reaches the same distance either side of itself, so it
+    // turns evenly rather than easing in and snapping out. A routed wire
+    // tracks its waypoints closely — they were chosen to clear the nodes,
+    // and a wide curve between them would undo that — so the reach is capped,
+    // and the shorter of the two spans meeting at a corner limits it, which
+    // keeps the control points from overshooting.
+    let spans: Vec<f32> = (0..points.len() - 1)
+        .map(|i| (points[i + 1] - points[i]).length())
+        .collect();
+    let cap = viewport_scaled(style.wire_min_curve, zoom);
+    let reach = |i: usize| -> f32 {
+        let before = i.checked_sub(1).map_or(f32::INFINITY, |j| spans[j]);
+        let after = spans.get(i).copied().unwrap_or(f32::INFINITY);
+        (before.min(after) * 0.5).min(cap).max(1.0)
+    };
 
     (0..points.len() - 1)
         .map(|i| {
             let (a, b) = (points[i], points[i + 1]);
-            [a, a + tangent(i) * pull, b - tangent(i + 1) * pull, b]
+            [
+                a,
+                a + tangent(i) * reach(i),
+                b - tangent(i + 1) * reach(i + 1),
+                b,
+            ]
         })
         .collect()
 }
@@ -747,7 +753,7 @@ mod tests {
     }
 
     #[test]
-    fn a_routed_wire_bends_at_most_twice() {
+    fn a_routed_wire_crosses_at_one_height() {
         let (library, mut graph) = crowded();
         let style = EditorStyle::default();
         let size = |g: &crate::Graph, n: &crate::Node| node_size(g, &library, n, &style);
@@ -770,16 +776,37 @@ mod tests {
             .count();
         assert!(routed > 0, "this graph needs routing, or the test proves nothing");
         for conn in graph.connections() {
+            if conn.waypoints.is_empty() {
+                continue;
+            }
+            // Leaving a channel, the run across, arriving at the other: four
+            // corners at the very most, and fewer when a height already
+            // matches.
             assert!(
-                conn.waypoints.len() <= 2,
-                "{:?} bends {} times; one run across should need two",
+                conn.waypoints.len() <= 4,
+                "{:?} bends {} times",
                 conn.id,
                 conn.waypoints.len()
             );
-            // A stair between lanes is what the extra bends used to be.
-            if let [first, last] = conn.waypoints[..] {
-                assert_eq!(first.y, last.y, "{:?} steps instead of running flat", conn.id);
-            }
+            // The wire climbs inside the channels, so it only ever occupies
+            // two x positions, and crosses everything between at one height.
+            let mut xs: Vec<f32> = conn.waypoints.iter().map(|p| p.x).collect();
+            xs.dedup();
+            assert!(xs.len() <= 2, "{:?} climbs outside a channel: {xs:?}", conn.id);
+            assert!(
+                xs.windows(2).all(|w| w[0] < w[1]),
+                "{:?} doubles back: {xs:?}",
+                conn.id
+            );
+            // Exactly one height is shared by both channels: the run across.
+            let shared: Vec<f32> = conn
+                .waypoints
+                .iter()
+                .filter(|p| p.x == xs[0])
+                .filter(|p| conn.waypoints.iter().any(|q| q.x != xs[0] && q.y == p.y))
+                .map(|p| p.y)
+                .collect();
+            assert_eq!(shared.len(), 1, "{:?} steps between heights", conn.id);
         }
     }
 }

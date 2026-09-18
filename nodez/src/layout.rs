@@ -503,6 +503,7 @@ pub fn route_links<N: NodeData>(
             y: lane,
             gap,
             from: a.y,
+            to: b.y,
         });
         routes.push(route);
     }
@@ -538,7 +539,15 @@ pub fn route_links<N: NodeData>(
                 // was picked to clear.
                 let y = (lane.y + offsets.get(&r).copied().unwrap_or(0.0))
                     .clamp(lane.gap.0, lane.gap.1);
-                vec![pos2(lane.exit, y), pos2(lane.entry, y)]
+                // Climb inside the channels, where there is room, and meet
+                // both sockets level. Dropping to the socket over the last
+                // stretch instead would hook the wire into it sideways.
+                simplify(&[
+                    pos2(lane.exit, lane.from),
+                    pos2(lane.exit, y),
+                    pos2(lane.entry, y),
+                    pos2(lane.entry, lane.to),
+                ])
             }
         };
         if let Some(conn) = graph.connection_mut(route.link) {
@@ -563,6 +572,8 @@ struct Lane {
     gap: (f32, f32),
     /// The height the wire starts at, which orders a shared lane.
     from: f32,
+    /// The height it has to arrive at.
+    to: f32,
 }
 
 /// One wire's claim on a height another wire also wants.
@@ -654,4 +665,17 @@ fn cubic(points: &[Pos2; 4], t: f32) -> Pos2 {
         a * points[0].x + b * points[1].x + c * points[2].x + d * points[3].x,
         a * points[0].y + b * points[1].y + c * points[2].y + d * points[3].y,
     )
+}
+
+/// Drop waypoints that say nothing: a wire already at the right height needs
+/// no corner to get there.
+fn simplify(points: &[Pos2]) -> Vec<Pos2> {
+    const CLOSE: f32 = 0.5;
+    let mut out: Vec<Pos2> = Vec::with_capacity(points.len());
+    for p in points {
+        if out.last().is_none_or(|last| last.distance(*p) > CLOSE) {
+            out.push(*p);
+        }
+    }
+    out
 }

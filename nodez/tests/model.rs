@@ -453,20 +453,17 @@ fn routing_bends_only_the_wires_that_span_columns() {
         assert!(link.waypoints.is_empty(), "{from:?}->{to:?} should stay straight");
     }
 
-    // The long one crosses both columns in a single run, so it bends twice at
-    // most however many columns it passes.
+    // The long one crosses both columns in a single run, whatever it passes:
+    // out into one channel, across, and in from the other.
     let long = graph
         .connections()
         .find(|c| c.from.node == ids[0] && c.to.node == ids[3])
         .unwrap();
-    assert_eq!(long.waypoints.len(), 2);
-    assert_eq!(
-        long.waypoints[0].y, long.waypoints[1].y,
-        "the run across should be flat, not a stair"
-    );
-    // It only ever moves forward.
-    let xs: Vec<f32> = long.waypoints.iter().map(|p| p.x).collect();
-    assert!(xs.windows(2).all(|w| w[0] <= w[1]), "waypoints double back: {xs:?}");
+    assert!(!long.waypoints.is_empty());
+    let mut xs: Vec<f32> = long.waypoints.iter().map(|p| p.x).collect();
+    xs.dedup();
+    assert!(xs.len() <= 2, "it should climb in the channels only: {xs:?}");
+    assert!(xs.windows(2).all(|w| w[0] < w[1]), "waypoints double back: {xs:?}");
 }
 
 #[test]
