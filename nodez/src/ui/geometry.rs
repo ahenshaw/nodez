@@ -544,11 +544,12 @@ fn segment_pull(from: Pos2, to: Pos2, style: &EditorStyle, zoom: f32) -> f32 {
 }
 
 /// The cubic segments a wire is drawn from: one when it runs straight to its
-/// socket, one per span when it bends through waypoints.
+/// socket, otherwise a rounded version of the path through its waypoints.
 ///
-/// The curve leaves and enters its sockets horizontally, as an unrouted wire
-/// does, and at each waypoint it follows the run of the wire through it, so
-/// the joins do not show.
+/// The corners are filleted rather than passed through: the wire starts
+/// turning before each one and has finished turning after it. Bending *at* a
+/// corner instead would carry the wire past it — still descending as it met
+/// the socket's height — and take a reverse bend to come back.
 pub(crate) fn wire_path(
     from: Pos2,
     to: Pos2,
@@ -565,53 +566,58 @@ pub(crate) fn wire_path(
     points.extend_from_slice(waypoints);
     points.push(to);
 
-    // At a bend, split the difference between the way the wire arrives and
-    // the way it leaves. Taking the chord across the whole corner instead
-    // would point nearly straight along the run, and a wire dropping into a
-    // narrow channel would hook rather than turn.
-    let tangent = |i: usize| -> Vec2 {
-        if i == 0 || i + 1 == points.len() {
-            return vec2(1.0, 0.0);
-        }
-        let unit = |v: Vec2| {
-            if v.length_sq() < 1.0 {
-                vec2(1.0, 0.0)
-            } else {
-                v.normalized()
-            }
-        };
-        let run = unit(points[i] - points[i - 1]) + unit(points[i + 1] - points[i]);
-        unit(run)
-    };
-
-    // Each corner reaches the same distance either side of itself, so it
-    // turns evenly rather than easing in and snapping out. A routed wire
-    // tracks its waypoints closely — they were chosen to clear the nodes,
-    // and a wide curve between them would undo that — so the reach is capped,
-    // and the shorter of the two spans meeting at a corner limits it, which
-    // keeps the control points from overshooting.
     let spans: Vec<f32> = (0..points.len() - 1)
         .map(|i| (points[i + 1] - points[i]).length())
         .collect();
+    // A routed wire tracks its waypoints closely — they were chosen to clear
+    // the nodes, and a wide corner would undo that. The shorter of the two
+    // spans meeting at a corner also limits it, so neighboring corners cannot
+    // eat into each other.
     let cap = viewport_scaled(style.wire_min_curve, zoom);
-    let reach = |i: usize| -> f32 {
-        let before = i.checked_sub(1).map_or(f32::INFINITY, |j| spans[j]);
-        let after = spans.get(i).copied().unwrap_or(f32::INFINITY);
-        (before.min(after) * 0.5).min(cap).max(1.0)
-    };
+    let radius = |i: usize| (spans[i - 1].min(spans[i]) * 0.5).min(cap);
 
-    (0..points.len() - 1)
-        .map(|i| {
-            let (a, b) = (points[i], points[i + 1]);
-            [
-                a,
-                a + tangent(i) * reach(i),
-                b - tangent(i + 1) * reach(i + 1),
-                b,
-            ]
-        })
-        .collect()
+    let unit = |v: Vec2| {
+        if v.length_sq() < f32::EPSILON {
+            Vec2::ZERO
+        } else {
+            v.normalized()
+        }
+    };
+    let straight = |a: Pos2, b: Pos2| [a, a + (b - a) / 3.0, b - (b - a) / 3.0, b];
+
+    let mut path = Vec::with_capacity(points.len() * 2);
+    let mut cursor = points[0];
+    for i in 1..points.len() - 1 {
+        let corner = points[i];
+        let r = radius(i);
+        let enter = corner - unit(corner - points[i - 1]) * r;
+        let leave = corner + unit(points[i + 1] - corner) * r;
+
+        if (enter - cursor).length() > 0.01 {
+            path.push(straight(cursor, enter));
+        }
+        if r > 0.01 {
+            // The circle-ish arc the corner rounds off. Both handles pull
+            // toward the corner, so the curve stays inside it.
+            path.push([
+                enter,
+                enter + (corner - enter) * CORNER_HANDLE,
+                leave + (corner - leave) * CORNER_HANDLE,
+                leave,
+            ]);
+        }
+        cursor = leave;
+    }
+    let last = points[points.len() - 1];
+    if (last - cursor).length() > 0.01 || path.is_empty() {
+        path.push(straight(cursor, last));
+    }
+    path
 }
+
+/// Handle length, as a fraction of the corner radius, that makes a cubic sit
+/// closest to a quarter circle.
+const CORNER_HANDLE: f32 = 0.5523;
 
 fn viewport_scaled(len: f32, zoom: f32) -> f32 {
     len * zoom
@@ -750,6 +756,60 @@ mod tests {
             crossings.len(),
             &crossings[..crossings.len().min(4)]
         );
+    }
+
+    /// A rounded corner stays inside the turn. A corner that blends its
+    /// tangent instead carries the wire past the socket's height and needs a
+    /// reverse bend to come back, which shows up here as a sample outside the
+    /// path's own bounding box.
+    #[test]
+    fn a_routed_wire_never_overshoots_its_path() {
+        let (library, mut graph) = crowded();
+        let style = EditorStyle::default();
+        let size = |g: &crate::Graph, n: &crate::Node| node_size(g, &library, n, &style);
+
+        crate::layout::layered(&mut graph, &LayoutOptions::default(), size).unwrap();
+        crate::layout::route_links(
+            &mut graph,
+            &RouteOptions::default(),
+            size,
+            |g, socket, kind| {
+                let node = g.node(socket.node)?;
+                socket_anchor(g, &library, node, &style, kind, &socket.socket)
+            },
+        )
+        .unwrap();
+
+        let mut checked = 0;
+        for conn in graph.connections() {
+            if conn.waypoints.is_empty() {
+                continue;
+            }
+            let from_node = graph.node(conn.from.node).unwrap();
+            let to_node = graph.node(conn.to.node).unwrap();
+            let a = socket_anchor(&graph, &library, from_node, &style, SocketKind::Output,
+                &conn.from.socket).unwrap();
+            let b = socket_anchor(&graph, &library, to_node, &style, SocketKind::Input,
+                &conn.to.socket).unwrap();
+
+            let mut hull = Rect::from_points(&[a, b]);
+            for p in &conn.waypoints {
+                hull.extend_with(*p);
+            }
+            let hull = hull.expand(0.5);
+            for points in wire_path(a, b, &conn.waypoints, &style, 1.0) {
+                for i in 0..=32 {
+                    let p = bezier_point(&points, i as f32 / 32.0);
+                    assert!(
+                        hull.contains(p),
+                        "{:?} swings out to {p:?}, past {hull:?}",
+                        conn.id
+                    );
+                }
+            }
+            checked += 1;
+        }
+        assert!(checked > 0, "no wire was routed, so this proves nothing");
     }
 
     #[test]
