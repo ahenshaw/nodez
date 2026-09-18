@@ -1,4 +1,11 @@
 # nodez
+[!NOTE]
+This code (and documentation) are created with a great deal of
+AI assistance.  However, this is a library that I needed and I didn't
+like the look-and-feel, nor the usage model, of the existing node-editing
+libraries. This library will be maintained, as it is needed for another
+(non-AI) project.
+
 
 A Blender-style node editor for [egui](https://github.com/emilk/egui), with a
 typed graph you can walk.
