@@ -764,29 +764,58 @@ impl NodeEditor {
             self.state.interaction = Interaction::Idle;
         }
 
-        // One rail per multi-input, behind its slots.
-        let mut rails: Vec<(usize, f32, f32, crate::types::DataTypeId)> = Vec::new();
+        // One rail per multi-input, running behind its links and ending in a
+        // short stub. The stub says there is room for another without drawing
+        // a socket that is not there yet.
+        struct Rail {
+            index: usize,
+            top: f32,
+            last_linked: Option<f32>,
+            free: f32,
+            ty: crate::types::DataTypeId,
+        }
+        let mut rails: Vec<Rail> = Vec::new();
         for socket in geom.sockets.iter().filter(|s| s.slot.is_some()) {
-            match rails.iter_mut().find(|(index, ..)| *index == socket.index) {
-                Some((_, top, bottom, _)) => {
-                    *top = top.min(socket.center.y);
-                    *bottom = bottom.max(socket.center.y);
+            let rail = match rails.iter_mut().find(|rail| rail.index == socket.index) {
+                Some(rail) => rail,
+                None => {
+                    rails.push(Rail {
+                        index: socket.index,
+                        top: socket.center.y,
+                        last_linked: None,
+                        free: socket.center.y,
+                        ty: socket.ty,
+                    });
+                    rails.last_mut().expect("just pushed")
                 }
-                None => rails.push((socket.index, socket.center.y, socket.center.y, socket.ty)),
+            };
+            rail.top = rail.top.min(socket.center.y);
+            if socket.is_free_slot {
+                rail.free = socket.center.y;
+            } else {
+                let y = socket.center.y;
+                rail.last_linked = Some(rail.last_linked.unwrap_or(y).max(y));
             }
         }
-        for (_, top, bottom, ty) in rails {
-            if bottom > top {
-                draw::paint_multi_track(
-                    painter,
-                    geom.body.left(),
-                    top,
-                    bottom,
-                    library.types.color(ty),
-                    &self.style,
-                    zoom,
-                );
-            }
+        let stub = viewport.scale(self.style.multi_slot_height) * 0.5;
+        for rail in &rails {
+            let (top, bottom) = match rail.last_linked {
+                // Stubs at both ends: there is room above the first link as
+                // well as below the last, and dropping on a socket inserts
+                // ahead of it.
+                Some(last) => (rail.top - stub, last + stub),
+                // Nothing wired yet: a lone stub marks the socket.
+                None => (rail.free - stub * 0.5, rail.free + stub * 0.5),
+            };
+            draw::paint_multi_track(
+                painter,
+                geom.body.left(),
+                top,
+                bottom,
+                library.types.color(rail.ty),
+                &self.style,
+                zoom,
+            );
         }
 
         // Sockets are allocated before the body widgets so a widget wins in the
@@ -825,14 +854,17 @@ impl NodeEditor {
 
             let state = self.socket_state(graph, library, socket, geom.id, hovered_socket);
             if socket.is_free_slot {
-                draw::paint_free_slot(
-                    painter,
-                    socket.center,
-                    library.types.color(socket.ty),
-                    &self.style,
-                    zoom,
-                    state,
-                );
+                // Only worth drawing when a wire could land here.
+                if state != draw::SocketState::Normal {
+                    draw::paint_free_slot(
+                        painter,
+                        socket.center,
+                        library.types.color(socket.ty),
+                        &self.style,
+                        zoom,
+                        state,
+                    );
+                }
             } else {
                 draw::paint_socket(
                     painter,

@@ -363,6 +363,35 @@ fn multi_input_order_survives_a_rewire() {
 }
 
 #[test]
+fn a_link_can_be_inserted_ahead_of_the_first() {
+    let f = fixture();
+    let mut graph = Graph::new();
+    let join = graph.add_node(&f.library, f.join, pos2(200.0, 0.0));
+
+    let text = |graph: &mut Graph, part: &str| {
+        let n = graph.add_node(&f.library, f.text, pos2(0.0, 0.0));
+        graph.node_mut(n).unwrap().set_input_value("value", part);
+        n
+    };
+    for part in ["b", "c"] {
+        let n = text(&mut graph, part);
+        graph.connect(&f.library, (n, "out"), (join, "parts")).unwrap();
+    }
+    // Slot 0 is the head of the queue, not a replacement for whoever is there.
+    let first = text(&mut graph, "a");
+    graph
+        .connect_at(&f.library, (first, "out"), (join, "parts"), 0)
+        .unwrap();
+
+    let order: Vec<String> = graph
+        .links_into(join, "parts")
+        .filter_map(|c| graph.node(c.from.node)?.input_value("value"))
+        .filter_map(|v| v.as_str().map(str::to_owned))
+        .collect();
+    assert_eq!(order, ["a", "b", "c"]);
+}
+
+#[test]
 fn links_can_be_reordered() {
     let f = fixture();
     let mut graph = Graph::new();
