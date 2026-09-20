@@ -325,6 +325,61 @@ fn crossing_sweep(jitter: f32, what: &str) {
     );
 }
 
+/// A wire may climb to get past what is in its way, and no further. Detouring
+/// over the whole canvas for two sockets a few pixels apart is the failure
+/// this catches: it is clear of everything, so no other sweep objects.
+#[test]
+fn a_wire_climbs_no_further_than_it_must() {
+    let mut failures: Vec<String> = Vec::new();
+    let mut checked = 0;
+
+    for seed in 1..=CASES {
+        let case = route_with(&mut Rng::new(seed), 0.0);
+        for conn in case.graph.connections() {
+            if conn.waypoints.is_empty() {
+                continue;
+            }
+            checked += 1;
+            let (a, b) = case.ends(conn);
+
+            // What the wire has to clear: its own two ends, and every node
+            // standing in the stretch of canvas it crosses. Measured from the
+            // sockets, so this says nothing about how the router works.
+            let (lo, hi) = (a.x.min(b.x), a.x.max(b.x));
+            let mut top = a.y.min(b.y);
+            let mut bottom = a.y.max(b.y);
+            for (id, rect) in &case.rects {
+                if *id == conn.from.node || *id == conn.to.node {
+                    continue;
+                }
+                if rect.right() >= lo && rect.left() <= hi {
+                    top = top.min(rect.top());
+                    bottom = bottom.max(rect.bottom());
+                }
+            }
+            // Going clear of all that costs a margin; three is generous.
+            let slack = RouteOptions::default().margin * 3.0;
+            for point in &conn.waypoints {
+                let strayed = (top - slack - point.y).max(point.y - (bottom + slack));
+                if strayed > 0.0 {
+                    failures.push(format!(
+                        "seed {seed}: wire {:?} climbs {strayed:.0}px past anything in its way",
+                        conn.id
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(checked > 0, "no routed wires; the sweep proves nothing");
+    assert!(
+        failures.is_empty(),
+        "{} of {checked} routed wires take the long way round:\n{}",
+        failures.len(),
+        report(&failures)
+    );
+}
+
 /// A routed wire has to arrive along its own height, from outside the node it
 /// is landing on. Letting the climb sit on the target's edge costs the last
 /// leg its length, and the wire then drops onto the socket down the face of

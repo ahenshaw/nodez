@@ -670,24 +670,29 @@ pub fn route_links<N: NodeData>(
                 );
                 let held = (reach(raw.0), reach(raw.1));
 
-                // Heights worth trying, best-looking first: the lane the wire
-                // was given, then clean over the top of everything in its way,
-                // then under the bottom. The detours are ugly, and they are
-                // only ever reached when the pretty answer would have drawn
-                // the wire through a node, which is uglier.
+                // Heights worth trying: the lane the wire was given, then
+                // clear over the top of what is in its way, then under the
+                // bottom of it.
+                //
+                // In its way means the boxes standing in the stretch this wire
+                // actually crosses. Clearing everything on the canvas instead
+                // sends a wire over the whole graph and back down for the sake
+                // of two sockets a few pixels apart.
                 let mut heights = vec![height(r, &lane)];
-                if !near.is_empty() {
-                    let top = near.iter().map(|r| r.top()).fold(f32::INFINITY, f32::min);
-                    let bottom = near
+                let crossing: Vec<&Rect> = near
+                    .iter()
+                    .filter(|rect| rect.right() >= outer.0 && rect.left() <= outer.1)
+                    .collect();
+                if !crossing.is_empty() {
+                    let top = crossing
+                        .iter()
+                        .map(|r| r.top())
+                        .fold(f32::INFINITY, f32::min);
+                    let bottom = crossing
                         .iter()
                         .map(|r| r.bottom())
                         .fold(f32::NEG_INFINITY, f32::max);
-                    let (over, under) = (top - options.margin, bottom + options.margin);
-                    if (over - lane.from).abs() <= (under - lane.from).abs() {
-                        heights.extend([over, under]);
-                    } else {
-                        heights.extend([under, over]);
-                    }
+                    heights.extend([top - options.margin, bottom + options.margin]);
                 }
 
                 // The legs the wire would run, given a height and the two
@@ -715,11 +720,22 @@ pub fn route_links<N: NodeData>(
                 // with the sockets' room kept and with it given up, and the
                 // two channels unmeasured. None of them may stand inside the
                 // wire's own two nodes. Ranked by how deeply buried the
-                // wire is first and how stubby its approach second, because a
-                // wire under a node is worse than one that meets its socket
-                // abruptly. A wire that is neither wins outright.
-                let mut best: Option<((f32, f32), Vec<Pos2>)> = None;
-                'search: for &y in &heights {
+                // wire is first, how stubby its approach second and how much
+                // wire it spends last: a wire under a node is worse than one
+                // that meets its socket abruptly, and either is worse than one
+                // that merely takes the long way round.
+                // How much wire it takes. Two clear answers are not equally
+                // good: the one that gets there without touring the canvas is
+                // the one to draw.
+                let length = |points: &[Pos2; 6]| -> f32 {
+                    points
+                        .windows(2)
+                        .map(|leg| (leg[1].x - leg[0].x).abs() + (leg[1].y - leg[0].y).abs())
+                        .sum()
+                };
+
+                let mut best: Option<((f32, f32, f32), Vec<Pos2>)> = None;
+                for &y in &heights {
                     let tries = [
                         (
                             clear_climb(held.0, a, y, room, &near, options),
@@ -737,15 +753,13 @@ pub fn route_links<N: NodeData>(
                         let cost = (
                             intrusion(&points, &near, options),
                             stub(exit, entry),
+                            length(&points),
                         );
                         let better = best
                             .as_ref()
                             .is_none_or(|(worst, _)| cost.partial_cmp(worst) == Some(Less));
                         if better {
                             best = Some((cost, simplify(&points[1..5])));
-                        }
-                        if cost == (0.0, 0.0) {
-                            break 'search;
                         }
                     }
                 }
