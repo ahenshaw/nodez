@@ -169,6 +169,11 @@ pub struct SocketSpec {
     pub widget: Widget,
     /// Inputs are single-link by default, like Blender. Set this to accept a fan-in.
     pub multi: bool,
+    /// Whether the node still means something with this input left unwired.
+    ///
+    /// Only says anything about a link-only input: one with an inline editor
+    /// always has a value, and a fan-in is allowed to be empty.
+    pub optional: bool,
     /// Hidden sockets still exist in the model but are not drawn.
     pub hidden: bool,
     pub description: String,
@@ -184,6 +189,7 @@ impl SocketSpec {
             default: Value::Null,
             widget: Widget::None,
             multi: false,
+            optional: false,
             hidden: false,
             description: String::new(),
         }
@@ -219,6 +225,16 @@ impl SocketSpec {
         self
     }
 
+    /// Say the node works with this input left unwired.
+    ///
+    /// `#[derive(NodeType)]` sets this for an `Option<T>` field. It is what
+    /// tells a required input apart from one that is merely empty, which is
+    /// the difference between a node that is unfinished and one that is done.
+    pub fn optional(mut self) -> Self {
+        self.optional = true;
+        self
+    }
+
     pub fn hidden(mut self) -> Self {
         self.hidden = true;
         self
@@ -235,6 +251,17 @@ impl SocketSpec {
         } else {
             &self.label
         }
+    }
+
+    /// Whether this input has to be wired for the node to mean anything.
+    ///
+    /// Derived rather than declared, from three things the schema already
+    /// says: an input with an inline editor always has a value to fall back
+    /// on, a fan-in is allowed to be empty, and an optional one says outright
+    /// that it can be left alone. What is left is an input with nowhere else
+    /// to get its value from.
+    pub fn required(&self) -> bool {
+        !self.optional && !self.multi && !self.hidden && self.widget == Widget::None
     }
 }
 

@@ -30,7 +30,7 @@ use egui::{
 use crate::graph::{
     ConnectError, Connection, ConnectionId, Graph, NodeData, NodeId, SocketKind, SocketRef,
 };
-use crate::template::{NodeLibrary, TemplateId, Widget};
+use crate::template::{NodeLibrary, NodeTemplate, SocketSpec, TemplateId, Widget};
 use crate::types::DataTypeId;
 
 use draw::{NodeChromeState, SocketState};
@@ -680,6 +680,10 @@ impl NodeEditor {
                 active: self.state.active == Some(geom.id),
                 muted,
                 hovered: response.hovered(),
+                missing: geom
+                    .rows
+                    .iter()
+                    .any(|row| self.row_is_missing(template, row, muted)),
             },
         );
 
@@ -914,8 +918,11 @@ impl NodeEditor {
                 draw::paint_socket(
                     painter,
                     socket.center,
-                    library.types.color(socket.ty),
-                    library.types.shape(socket.ty),
+                    draw::SocketLook {
+                        color: library.types.color(socket.ty),
+                        shape: library.types.shape(socket.ty),
+                        missing: self.socket_is_missing(template, socket, muted),
+                    },
                     &self.style,
                     zoom,
                     state,
@@ -974,6 +981,12 @@ impl NodeEditor {
                         } else {
                             row.rect.center().y
                         };
+                        // The outline says which node; this says which input.
+                        let color = if self.row_is_missing(template, row, muted) {
+                            self.style.missing_input
+                        } else {
+                            self.style.body_text
+                        };
                         draw::paint_clipped_text(
                             painter,
                             row.rect,
@@ -981,7 +994,7 @@ impl NodeEditor {
                             Align2::LEFT_CENTER,
                             spec.display(),
                             label_font.clone(),
-                            self.style.body_text,
+                            color,
                         );
                         continue;
                     }
@@ -1262,6 +1275,38 @@ impl NodeEditor {
             }
         }
         best.map(|(_, id)| id)
+    }
+
+    /// Whether an input still has to be wired.
+    ///
+    /// Read off the geometry, which already asked the graph what is linked,
+    /// and off the schema, which already says what may be left alone. Nothing
+    /// is looked up again and nothing new is declared.
+    fn row_is_missing(&self, template: &NodeTemplate, row: &RowGeometry, muted: bool) -> bool {
+        let RowKind::Input(index) = row.kind else {
+            return false;
+        };
+        self.style.show_missing_inputs
+            && !muted
+            && !row.linked
+            && template.inputs.get(index).is_some_and(SocketSpec::required)
+    }
+
+    /// The same question for the socket the row belongs to.
+    fn socket_is_missing(
+        &self,
+        template: &NodeTemplate,
+        socket: &SocketGeometry,
+        muted: bool,
+    ) -> bool {
+        self.style.show_missing_inputs
+            && !muted
+            && socket.kind.is_input()
+            && !socket.linked
+            && template
+                .inputs
+                .get(socket.index)
+                .is_some_and(SocketSpec::required)
     }
 
     fn socket_state<N: NodeData>(

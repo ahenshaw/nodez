@@ -570,6 +570,65 @@ fn a_straight_wire_costs_nothing_to_store() {
     assert!(!serde_json::to_string(&graph).unwrap().contains("waypoints"));
 }
 
+/// An input that has to be wired and is not, which is what the editor marks.
+///
+/// Which inputs those are is read off the schema: an inline editor is a value
+/// to fall back on, a fan-in may be empty, and `Option<T>` says outright that
+/// the node works without it. What is left has nowhere else to get a value.
+#[test]
+fn missing_inputs_are_the_ones_with_nowhere_else_to_look() {
+    let mut library = NodeLibrary::new();
+    let text_ty = library.types.add("Text", Color32::from_rgb(0xA1, 0xA1, 0xA1));
+    let source = library.register(
+        NodeTemplate::new("source", "Source").output(SocketSpec::new("out", text_ty)),
+    );
+    let sink = library.register(
+        NodeTemplate::new("sink", "Sink")
+            // Nowhere else to look: this one has to be wired.
+            .input(SocketSpec::new("needed", text_ty))
+            .input(SocketSpec::new("spare", text_ty).optional())
+            .input(SocketSpec::new("many", text_ty).multi())
+            .input(SocketSpec::new("typed", text_ty).editable(Widget::text())),
+    );
+
+    let mut graph = Graph::new();
+    let target = graph.add_node(&library, sink, pos2(0.0, 0.0));
+
+    let missing = graph.missing_inputs(&library);
+    assert_eq!(missing.len(), 1, "{missing:?}");
+    assert_eq!(missing[0].socket, "needed");
+    assert!(graph.is_input_missing(&library, target, "needed"));
+    for socket in ["spare", "many", "typed"] {
+        assert!(
+            !graph.is_input_missing(&library, target, socket),
+            "`{socket}` has somewhere else to get its value"
+        );
+    }
+
+    // Wiring it is what fills it.
+    let from = graph.add_node(&library, source, pos2(0.0, 0.0));
+    graph.connect(&library, (from, "out"), (target, "needed")).unwrap();
+    assert!(graph.missing_inputs(&library).is_empty());
+}
+
+/// A muted node is deliberately switched off, not unfinished.
+#[test]
+fn a_muted_node_has_no_missing_inputs() {
+    let mut library = NodeLibrary::new();
+    let text_ty = library.types.add("Text", Color32::from_rgb(0xA1, 0xA1, 0xA1));
+    let sink = library.register(
+        NodeTemplate::new("sink", "Sink").input(SocketSpec::new("needed", text_ty)),
+    );
+
+    let mut graph = Graph::new();
+    let target = graph.add_node(&library, sink, pos2(0.0, 0.0));
+    assert_eq!(graph.missing_inputs(&library).len(), 1);
+
+    graph.node_mut(target).unwrap().muted = true;
+    assert!(graph.missing_inputs(&library).is_empty());
+    assert!(!graph.is_input_missing(&library, target, "needed"));
+}
+
 #[test]
 fn layered_layout_sorts_into_columns() {
     let f = fixture();

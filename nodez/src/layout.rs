@@ -542,6 +542,15 @@ pub struct RouteOptions {
     /// buys a picture that is easier to follow at the price of wire that goes
     /// the long way round to keep out of another's way.
     pub cross: f32,
+    /// What running hard against a node costs, per pixel of wire, against a
+    /// pixel of wire in the open. Nothing is charged at a full clearance or
+    /// beyond it; the charge comes on as a wire crosses into the room it was
+    /// told to leave, and is worst where the wire is touching.
+    ///
+    /// This is what keeps a wire from disappearing into the body of a node it
+    /// is only passing. A route that squeezes past is always shorter than one
+    /// that goes round, so without a price on the squeeze it always wins.
+    pub hug: f32,
     /// The wire shape the editor draws, so the router can tell whether a wire
     /// left alone would actually clear the nodes between its ends. These
     /// mirror `EditorStyle`'s `wire_curvature`, `wire_min_curve` and
@@ -561,6 +570,9 @@ impl Default for RouteOptions {
             // round a bundle, not so much that it tours the canvas to dodge
             // one wire.
             cross: 120.0,
+            // A run drawn against a node costs three times a run in the open:
+            // itself, plus twice over for where it is.
+            hug: 2.0,
             curvature: 0.5,
             min_curve: 30.0,
             max_curve: 180.0,
@@ -915,17 +927,33 @@ fn search(
     // How hemmed in each line is, so the search can prefer a roomy one. Every
     // way across costs the same length, so without this the choice of line is
     // settled by nothing at all.
-    let elbow = pad * 3.0;
-    let crowding: Vec<f32> = xs
-        .iter()
-        .map(|&x| {
-            let room = near
-                .iter()
-                .map(|rect| (rect.left() - x).max(x - rect.right()).max(0.0))
-                .fold(f32::INFINITY, f32::min);
-            1.0 - (room / elbow).clamp(0.0, 1.0)
-        })
-        .collect();
+    //
+    // Measured against the clearance the wire was *asked* for, not the one
+    // this attempt settled for: a route found at a quarter of the clearance
+    // runs a quarter of a clearance from everything, and judging it by its
+    // own reduced yardstick would call that roomy. It is the same graph and
+    // the same eye looking at it either way.
+    //
+    // And it runs out at exactly that clearance, so a wire keeping the room
+    // it was asked for pays nothing at all. What is priced is only the room a
+    // wire gives up, which is the room the reader loses.
+    let elbow = options.margin;
+    let crowding = |lines: &[f32], lo: fn(&Rect) -> f32, hi: fn(&Rect) -> f32| -> Vec<f32> {
+        lines
+            .iter()
+            .map(|&line| {
+                let room = near
+                    .iter()
+                    .map(|rect| (lo(rect) - line).max(line - hi(rect)).max(0.0))
+                    .fold(f32::INFINITY, f32::min);
+                1.0 - (room / elbow).clamp(0.0, 1.0)
+            })
+            .collect()
+    };
+    // Both ways. Charging only the climbs left a wire free to run the length
+    // of a node's top edge, close enough to read as part of it.
+    let crowding_x = crowding(&xs, Rect::left, Rect::right);
+    let crowding_y = crowding(&ys, Rect::top, Rect::bottom);
 
     // A dense enough graph can ask for more grid than the search is worth.
     const CELLS: usize = 40_000;
@@ -1048,13 +1076,11 @@ fn search(
                 continue;
             }
             let turn = if moving == across { 0.0 } else { options.bend };
-            // Running down a line that hugs a node costs a little more than
-            // running down one in the open.
-            let hug = if moving {
-                0.0
-            } else {
-                crowding[x] * (hi - lo) * 0.5
-            };
+            // Running along a line that hugs a node costs more than running
+            // along one in the open, by how close it is and how far it goes.
+            let hug = options.hug
+                * (hi - lo)
+                * if moving { crowding_y[y] } else { crowding_x[x] };
             // What it crosses, on the line it is crossing them on.
             let cut = over.on(moving, if moving { y } else { x }, lo, hi) as f32 * options.cross;
             let cost = sofar + (hi - lo) + turn + hug + cut + toll(moving, line, lo, hi);

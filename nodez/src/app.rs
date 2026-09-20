@@ -377,6 +377,11 @@ impl<N: NodeData> EditorApp<N> {
                     self.apply_routing();
                 }
                 ui.checkbox(&mut self.show_inspector, "Inspector");
+                ui.checkbox(
+                    &mut self.editor.style.show_missing_inputs,
+                    "Unfilled",
+                )
+                .on_hover_text("Mark inputs that have to be wired and are not");
 
                 egui::ComboBox::from_id_salt("nodez-scroll-mode")
                     .width(96.0)
@@ -488,6 +493,19 @@ impl<N: NodeData> EditorApp<N> {
                 .weak(),
             );
         }
+        let missing = self.graph.missing_inputs(&self.library);
+        if !missing.is_empty() {
+            let nodes: HashSet<NodeId> = missing.iter().map(|socket| socket.node).collect();
+            ui.label(
+                RichText::new(format!(
+                    "{} input(s) still to wire, on {} node(s)",
+                    missing.len(),
+                    nodes.len()
+                ))
+                .small()
+                .color(self.editor.style.missing_input),
+            );
+        }
 
         ui.add_space(6.0);
         let Some(active) = self
@@ -502,6 +520,24 @@ impl<N: NodeData> EditorApp<N> {
 
         let title = self.graph.node(active).map(|n| n.title.clone()).unwrap_or_default();
         ui.label(RichText::new(title).strong());
+
+        // What is wrong with this node, in words. The canvas says which node
+        // and which row; this is what says what to do about it.
+        let unwired: Vec<String> = self
+            .graph
+            .template_of(&self.library, active)
+            .into_iter()
+            .flat_map(|template| template.inputs.iter())
+            .filter(|socket| self.graph.is_input_missing(&self.library, active, &socket.name))
+            .map(|socket| socket.display().to_owned())
+            .collect();
+        if !unwired.is_empty() {
+            ui.label(
+                RichText::new(format!("Needs a wire into: {}", unwired.join(", ")))
+                    .small()
+                    .color(self.editor.style.missing_input),
+            );
+        }
 
         egui::ScrollArea::vertical()
             .id_salt("nodez-inspector")

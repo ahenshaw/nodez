@@ -10,6 +10,23 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- `SocketSpec::optional`, set by `#[derive(NodeType)]` for an `Option<T>`
+  input. `Option<T>` used to reach only the reader, so the schema could not
+  tell a required link-only input from one that may be left alone — which is
+  the whole of what follows.
+- The editor marks an input that has to be wired and is not: the node's
+  outline, a halo behind the socket, and the row's label, in
+  `EditorStyle::missing_input`. `show_missing_inputs` turns it off. Which
+  inputs those are is derived from the schema, not declared: an inline editor
+  is a value to fall back on, a fan-in may be empty, `Option<T>` says so
+  outright, and a muted node is switched off rather than unfinished.
+- `Graph::missing_inputs` and `Graph::is_input_missing`, the same fact without
+  the editor, so a generator can refuse a graph for the reason already on
+  screen.
+- `RouteOptions::hug`: what running hard against a node costs, per pixel of
+  wire. Nothing is charged at a full clearance or beyond it — what is priced
+  is the room a wire gives up, which is the room the reader loses.
+
 - `RouteOptions::cross`: what going over another wire costs the router, in the
   same pixels `bend` charges for a corner. Wire routes are now chosen by
   counting crossings as well as ground and corners, and the plain curve a wire

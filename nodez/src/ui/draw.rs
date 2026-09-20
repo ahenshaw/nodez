@@ -143,16 +143,31 @@ pub(crate) fn paint_wire(
     }
 }
 
+/// What a socket looks like, apart from how it is being interacted with.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SocketLook {
+    /// The data type's color and shape. The fill is never anything else: it
+    /// is the only thing that says what travels down the wire.
+    pub color: Color32,
+    pub shape: SocketShape,
+    /// An input that has to be wired and is not, marked by a halo behind it.
+    pub missing: bool,
+}
+
 /// Paint a socket in the shape its data type asked for.
 pub(crate) fn paint_socket(
     painter: &Painter,
     center: Pos2,
-    color: Color32,
-    shape: SocketShape,
+    look: SocketLook,
     style: &EditorStyle,
     zoom: f32,
     state: SocketState,
 ) {
+    let SocketLook {
+        color,
+        shape,
+        missing,
+    } = look;
     let radius = (style.socket_radius * zoom).max(2.0);
     let (fill, outline_color, outline_width) = match state {
         SocketState::Normal => (
@@ -183,6 +198,35 @@ pub(crate) fn paint_socket(
         radius
     };
 
+    // A halo behind the socket rather than a colored ring on it. Recoloring
+    // the outline works until the data type's own color is near the mark's --
+    // an image socket is already orange -- and then the mark disappears into
+    // the one socket it is about. Behind it, with the socket's own dark ring
+    // still drawn on top, there is always a line between the two colors.
+    if missing && state == SocketState::Normal {
+        paint_socket_shape(
+            painter,
+            center,
+            radius + (2.0 * zoom).max(1.5),
+            shape,
+            style.missing_input,
+            Stroke::NONE,
+            style,
+        );
+    }
+    paint_socket_shape(painter, center, radius, shape, fill, outline, style);
+}
+
+/// One socket, in the shape its data type asked for.
+fn paint_socket_shape(
+    painter: &Painter,
+    center: Pos2,
+    radius: f32,
+    shape: SocketShape,
+    fill: Color32,
+    outline: Stroke,
+    style: &EditorStyle,
+) {
     match shape {
         SocketShape::Circle => {
             painter.circle(center, radius, fill, outline);
@@ -262,6 +306,8 @@ pub(crate) struct NodeChromeState {
     pub active: bool,
     pub muted: bool,
     pub hovered: bool,
+    /// The node has an input that has to be wired and is not.
+    pub missing: bool,
 }
 
 /// Paint a node's shadow, body, header and outline.
@@ -322,6 +368,19 @@ pub(crate) fn paint_node_chrome(
         Stroke::new((outline_width * zoom).max(1.0), outline_color),
         StrokeKind::Middle,
     );
+
+    // Outside the node's own outline rather than in place of it, so being
+    // selected never hides being unfinished — and so this is still legible
+    // when the body is too small to draw and the outline is the whole node.
+    if state.missing {
+        let width = (style.node_selected_outline_width * zoom).max(1.0);
+        painter.rect_stroke(
+            rect.expand(width),
+            radius,
+            Stroke::new(width, style.missing_input),
+            StrokeKind::Middle,
+        );
+    }
 }
 
 /// The little triangle at the left of the header that collapses the node.

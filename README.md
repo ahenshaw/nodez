@@ -380,6 +380,31 @@ never while one is in flight.
 `clear_routing` returns how many wires were carrying a bend, and clearing
 `waypoints` on a single connection straightens just that one.
 
+## Marking what is still to be wired
+
+An input that has to be wired and is not gets marked: the node's outline, a
+halo behind the socket, and the row's label, all in `EditorStyle`'s
+`missing_input`. The socket's own fill is left alone — that color means its
+data type, and it is the only thing that does.
+
+Which inputs those are is read off the schema rather than declared. An input
+with an inline editor has a value to fall back on, a `Multi<T>` may be empty,
+and an `Option<T>` says outright that the node works without it. What is left
+is an input with nowhere else to look, which is what `SocketSpec::required`
+answers and what the mark is about.
+
+```rust
+graph.missing_inputs(&library)                        // every one, as SocketRefs
+graph.is_input_missing(&library, node, "image")       // one of them
+```
+
+The editor and a generator can then disagree about nothing: the demo's
+`--print` refuses the same graph the editor is already marking up. A muted node
+is deliberately switched off rather than unfinished, so it is never marked.
+
+`EditorStyle::show_missing_inputs` turns it off, and the demo's Unfilled box
+flips it live.
+
 ## Just the widget
 
 `EditorApp` is a window; `NodeEditor` is the canvas alone, for dropping into an

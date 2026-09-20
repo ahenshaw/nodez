@@ -737,3 +737,54 @@ fn paying_for_crossings_buys_fewer_of_them() {
          something and {free} when they are free"
     );
 }
+
+/// A routed wire mostly keeps the room it was asked to keep.
+///
+/// A wire drawn hard against a node it is only passing reads as part of that
+/// node, which is worse than the detour that would have avoided it. The
+/// router is allowed to squeeze — a wire boxed in on every side has to, and
+/// giving up is worse still — so this is a proportion rather than a rule, and
+/// a generous one: what it catches is the router deciding a squeeze is free.
+#[test]
+fn a_routed_wire_mostly_keeps_its_clearance() {
+    // A third of the clearance in from the edge. Closer than this and the
+    // wire is inside the gap that was supposed to be left around the node.
+    const TOO_CLOSE: f32 = 0.5;
+    const GRAPHS: u64 = 120;
+
+    let margin = RouteOptions::default().margin;
+    let (mut routed, mut squeezed) = (0, 0);
+    for seed in 1..=GRAPHS {
+        let case = route_with(&mut Rng::new(seed), 0.0);
+        if case.overlapping() {
+            continue;
+        }
+        for conn in case.graph.connections() {
+            if conn.waypoints.is_empty() {
+                continue;
+            }
+            routed += 1;
+            let mut nearest = f32::INFINITY;
+            for p in case.drawn(conn) {
+                for (id, rect) in &case.rects {
+                    if *id == conn.from.node || *id == conn.to.node {
+                        continue;
+                    }
+                    let dx = (rect.left() - p.x).max(p.x - rect.right()).max(0.0);
+                    let dy = (rect.top() - p.y).max(p.y - rect.bottom()).max(0.0);
+                    nearest = nearest.min(dx.max(dy));
+                }
+            }
+            if nearest < margin * TOO_CLOSE {
+                squeezed += 1;
+            }
+        }
+    }
+
+    assert!(routed > 100, "only {routed} routed wires; this proves nothing");
+    assert!(
+        squeezed * 3 < routed,
+        "{squeezed} of {routed} routed wires are drawn closer than half a clearance \
+         to a node they are only passing"
+    );
+}

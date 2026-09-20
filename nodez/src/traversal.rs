@@ -117,6 +117,48 @@ impl<N: NodeData> Graph<N> {
             .any(|c| c.from.node == node && c.from.socket == socket)
     }
 
+    /// Whether one input has to be wired and is not.
+    ///
+    /// Which inputs have to be wired is the schema's to say — see
+    /// [`crate::SocketSpec::required`] — and this asks the graph whether they are.
+    pub fn is_input_missing(&self, library: &NodeLibrary, node: NodeId, socket: &str) -> bool {
+        let Some(node_) = self.node(node) else {
+            return false;
+        };
+        // A muted node is deliberately switched off. Nothing about it is
+        // unfinished, and saying so would put a mark on every node somebody
+        // parked while they worked on something else.
+        if node_.muted {
+            return false;
+        }
+        self.template_of(library, node)
+            .and_then(|template| template.input_spec(socket))
+            .is_some_and(|spec| spec.required() && !self.is_input_linked(node, socket))
+    }
+
+    /// Every input in the graph that has to be wired and is not.
+    ///
+    /// The same fact the editor marks up, so a generator can refuse a graph
+    /// for the reason the editor is already showing rather than for one of
+    /// its own.
+    pub fn missing_inputs(&self, library: &NodeLibrary) -> Vec<SocketRef> {
+        let mut missing = Vec::new();
+        for node in self.nodes() {
+            if node.muted {
+                continue;
+            }
+            let Some(template) = self.template_of(library, node.id) else {
+                continue;
+            };
+            for socket in template.inputs.iter().filter(|s| s.required()) {
+                if !self.is_input_linked(node.id, &socket.name) {
+                    missing.push(SocketRef::new(node.id, socket.name.clone()));
+                }
+            }
+        }
+        missing
+    }
+
     /// Resolve an input socket to either its inline value or its incoming wires.
     pub fn input_source<'a>(
         &'a self,

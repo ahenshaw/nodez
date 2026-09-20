@@ -27,6 +27,17 @@ pub struct EditorStyle {
     pub node_selected_outline: Color32,
     /// Outline of the active node, the last one clicked.
     pub node_active_outline: Color32,
+    /// Mark on a node with an input that has to be wired and is not: its
+    /// outline, a halo behind the socket, and the row's label.
+    ///
+    /// Three marks from one color because they answer different questions.
+    /// Zoomed out, node bodies are not drawn at all and the outline is all
+    /// there is; up close, the outline says which node and the row says which
+    /// input. The socket's fill is left alone — that color means its data
+    /// type, and it is the only thing that does.
+    pub missing_input: Color32,
+    /// Whether to mark them at all.
+    pub show_missing_inputs: bool,
     pub node_selected_outline_width: f32,
     pub node_corner_radius: f32,
     pub node_shadow: Color32,
@@ -116,6 +127,8 @@ impl EditorStyle {
             node_outline_width: 1.0,
             node_selected_outline: Color32::from_rgb(0xED, 0x72, 0x1E),
             node_active_outline: Color32::from_rgb(0xFF, 0xFF, 0xFF),
+            missing_input: Color32::from_rgb(0xE0, 0x6C, 0x3C),
+            show_missing_inputs: true,
             node_selected_outline_width: 1.5,
             node_corner_radius: 5.0,
             node_shadow: Color32::from_black_alpha(0x50),
@@ -175,6 +188,7 @@ impl EditorStyle {
             header_text: Color32::from_rgb(0x10, 0x10, 0x10),
             body_text: Color32::from_rgb(0x1A, 0x1A, 0x1A),
             node_active_outline: Color32::from_rgb(0x20, 0x20, 0x20),
+            missing_input: Color32::from_rgb(0xC0, 0x44, 0x18),
             wire_dragging: Color32::from_rgb(0x30, 0x30, 0x30),
             box_select_fill: Color32::from_rgba_unmultiplied(0x00, 0x00, 0x00, 0x18),
             box_select_stroke: Stroke::new(1.0, Color32::from_rgb(0x30, 0x30, 0x30)),

@@ -451,6 +451,12 @@ fn node_impl(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 let multi = matches!(arity, Arity::Multi)
                     .then(|| quote!(socket = socket.multi();))
                     .unwrap_or_default();
+                // `Option<T>` is the only way a field says an input may be
+                // left unwired, so it is the only thing that can tell the
+                // editor which inputs are still to be filled in.
+                let optional = matches!(arity, Arity::Optional)
+                    .then(|| quote!(socket = socket.optional();))
+                    .unwrap_or_default();
 
                 schema.push(quote! {
                     {
@@ -476,6 +482,7 @@ fn node_impl(input: &DeriveInput) -> syn::Result<TokenStream2> {
                         }
                         #default
                         #multi
+                        #optional
                         template = template.input(socket);
                     }
                 });
