@@ -9,6 +9,8 @@ mod geometry;
 mod menu;
 mod style;
 mod widgets;
+#[cfg(test)]
+mod route_check;
 
 pub use geometry::{
     NodeGeometry, RowGeometry, RowKind, SocketGeometry, Viewport, free_position, node_size,

@@ -475,6 +475,7 @@ pub fn route_links<N: NodeData>(
         let mut route = Route {
             link: id,
             lane: None,
+            ends: None,
         };
         let (Some(&start), Some(&end)) = (depths.get(&from.node), depths.get(&to.node)) else {
             routes.push(route);
@@ -503,14 +504,24 @@ pub fn route_links<N: NodeData>(
             continue;
         }
 
-        // One height clear of every column in the way, so the wire crosses
-        // them all in a single run instead of stepping between lanes.
-        let mut clear = vec![(f32::NEG_INFINITY, f32::INFINITY)];
-        for column in start + 1..end {
-            if let Some(rects) = columns.get(&column) {
-                clear = intersect(&clear, &clear_intervals(rects, options));
-            }
-        }
+        // One height clear of everything in the way, so the wire crosses it
+        // all in a single run instead of stepping between lanes.
+        //
+        // What counts as in the way is the stretch of x the wire actually
+        // runs across, not the columns it nominally spans. Asking the columns
+        // takes a node's depth for its position, and the two part company the
+        // moment anyone drags a node: it keeps its depth while its box moves
+        // into a channel this wire climbs, or out of one it was blocking.
+        // Measuring the boxes means a nudged layout routes as well as a
+        // pristine one.
+        let run = (channel(start).lo, channel(end - 1).hi);
+        let mut blocking: Vec<Rect> = obstacles
+            .iter()
+            .filter(|rect| rect.right() >= run.0 && rect.left() <= run.1)
+            .copied()
+            .collect();
+        blocking.sort_by(|p, q| p.top().total_cmp(&q.top()));
+        let clear = clear_intervals(&blocking, options);
         let (lane, gap) = choose_lane(&clear, a.y, b.y);
         route.lane = Some(Lane {
             exit_channel: start,
@@ -520,6 +531,7 @@ pub fn route_links<N: NodeData>(
             from: a.y,
             to: b.y,
         });
+        route.ends = Some((a, b, from.node, to.node));
         routes.push(route);
     }
 
@@ -610,30 +622,81 @@ pub fn route_links<N: NodeData>(
     }
 
     for (r, route) in routes.into_iter().enumerate() {
-        let waypoints = match route.lane {
-            None => Vec::new(),
-            Some(lane) => {
-                // Fanning must not push a wire back over the nodes the lane
-                // was picked to clear.
-                let y = height(r, &lane);
-                let exit = lines
-                    .get(&(r, true))
-                    .copied()
-                    .unwrap_or_else(|| channel(lane.exit_channel).center);
-                let entry = lines
-                    .get(&(r, false))
-                    .copied()
-                    .unwrap_or_else(|| channel(lane.entry_channel).center);
-                // Climb inside the channels, where there is room, and meet
-                // both sockets level. Dropping to the socket over the last
-                // stretch instead would hook the wire into it sideways.
-                simplify(&[
-                    pos2(exit, lane.from),
-                    pos2(exit, y),
-                    pos2(entry, y),
-                    pos2(entry, lane.to),
-                ])
+        let waypoints = match (route.lane, route.ends) {
+            (Some(lane), Some((a, b, from_node, to_node))) => {
+                let near: Vec<Rect> = rects
+                    .iter()
+                    .filter(|(id, _)| **id != from_node && **id != to_node)
+                    .map(|(_, rect)| *rect)
+                    .collect();
+                let channel_x = |k: usize, exit: bool| {
+                    lines
+                        .get(&(r, exit))
+                        .copied()
+                        .unwrap_or_else(|| channel(k).center)
+                };
+                let exit = channel_x(lane.exit_channel, true);
+                let entry = channel_x(lane.entry_channel, false);
+
+                // Heights worth trying, best-looking first: the lane the wire
+                // was given, then clean over the top of everything in its way,
+                // then under the bottom. The detours are ugly, and they are
+                // only ever reached when the pretty answer would have drawn
+                // the wire through a node, which is uglier.
+                let mut heights = vec![height(r, &lane)];
+                if !near.is_empty() {
+                    let top = near.iter().map(|r| r.top()).fold(f32::INFINITY, f32::min);
+                    let bottom = near
+                        .iter()
+                        .map(|r| r.bottom())
+                        .fold(f32::NEG_INFINITY, f32::max);
+                    let (over, under) = (top - options.margin, bottom + options.margin);
+                    if (over - lane.from).abs() <= (under - lane.from).abs() {
+                        heights.extend([over, under]);
+                    } else {
+                        heights.extend([under, over]);
+                    }
+                }
+
+                // The legs the wire would run, given a height and the two
+                // x it climbs at.
+                let legs = |y: f32, exit: f32, entry: f32| {
+                    [
+                        a,
+                        pos2(exit, lane.from),
+                        pos2(exit, y),
+                        pos2(entry, y),
+                        pos2(entry, lane.to),
+                        b,
+                    ]
+                };
+
+                // Each height, climbed where the columns say and climbed where
+                // the boxes say. The columns are only right until someone
+                // drags a node, and the boxes are only ever right, but a
+                // measured climb can still be pushed somewhere odd — so both
+                // are offered and the least buried one wins. A wire that
+                // touches nothing wins outright.
+                let mut best: Option<(f32, Vec<Pos2>)> = None;
+                'search: for &y in &heights {
+                    let measured = (
+                        clear_climb(exit, a, y, &near, options),
+                        clear_climb(entry, b, y, &near, options),
+                    );
+                    for (exit, entry) in [measured, (exit, entry)] {
+                        let points = legs(y, exit, entry);
+                        let cost = intrusion(&points, &near, options.margin * 0.5);
+                        if best.as_ref().is_none_or(|(worst, _)| cost < *worst) {
+                            best = Some((cost, simplify(&points[1..5])));
+                        }
+                        if cost == 0.0 {
+                            break 'search;
+                        }
+                    }
+                }
+                best.map(|(_, points)| points).unwrap_or_default()
             }
+            _ => Vec::new(),
         };
         if let Some(conn) = graph.connection_mut(route.link) {
             conn.waypoints = waypoints;
@@ -646,6 +709,9 @@ pub fn route_links<N: NodeData>(
 struct Route {
     link: ConnectionId,
     lane: Option<Lane>,
+    /// Where the wire leaves and arrives, and the two nodes it is allowed to
+    /// touch. The last pass needs both to check its own work.
+    ends: Option<(Pos2, Pos2, NodeId, NodeId)>,
 }
 
 /// The single run a routed wire makes between the channels either side.
@@ -687,6 +753,84 @@ struct Climb {
     entry: bool,
 }
 
+/// How far a wire's legs reach into the boxes they are meant to avoid; zero
+/// when the wire is clear.
+///
+/// The legs are axis-aligned and the drawn corners round off *inside* them, so
+/// measuring the polyline is a safe stand-in for measuring the curve. What is
+/// measured is how far under a box a leg sits, which is what reads as a wire
+/// disappearing rather than clipping a corner.
+fn intrusion(points: &[Pos2], boxes: &[Rect], pad: f32) -> f32 {
+    points
+        .windows(2)
+        .map(|leg| {
+            let run = Rect::from_two_pos(leg[0], leg[1]);
+            // A leg has extent along one axis only, so it is the other one
+            // that says how deep the leg is buried.
+            let horizontal = run.width() >= run.height();
+            boxes
+                .iter()
+                .map(|rect| {
+                    let rect = rect.expand(pad);
+                    if !rect.intersects(run) {
+                        return 0.0;
+                    }
+                    let depth = if horizontal {
+                        (run.top() - rect.top()).min(rect.bottom() - run.bottom())
+                    } else {
+                        (run.left() - rect.left()).min(rect.right() - run.right())
+                    };
+                    // Any touch at all has to cost something, or a leg
+                    // grazing an edge would score as a clean miss.
+                    depth.max(0.0) + 1.0
+                })
+                .sum::<f32>()
+        })
+        .sum()
+}
+
+/// Slide a climb sideways until it clears the boxes it would run through.
+///
+/// The wire reaches `socket` along its own height and then climbs to `y`, so
+/// both the reach and the climb have to be clear. Candidates are the edges of
+/// whatever is in the way, nearest first, which keeps the wire as close to the
+/// channel it was given as the boxes allow. If nothing works the wire keeps
+/// its channel: a drawn-through node beats a wire flung across the canvas.
+fn clear_climb(want: f32, socket: Pos2, y: f32, boxes: &[Rect], options: &RouteOptions) -> f32 {
+    let (lo, hi) = (socket.y.min(y), socket.y.max(y));
+    let pad = options.margin * 0.5;
+    let blocked = |x: f32| {
+        boxes.iter().any(|rect| {
+            let rect = rect.expand(pad);
+            // The climb itself.
+            let climbs_through =
+                rect.left() <= x && x <= rect.right() && rect.top() < hi && lo < rect.bottom();
+            // And the run out to it, level with the socket.
+            let reaches_through = rect.top() <= socket.y
+                && socket.y <= rect.bottom()
+                && rect.left() <= socket.x.max(x)
+                && socket.x.min(x) <= rect.right();
+            climbs_through || reaches_through
+        })
+    };
+    if !blocked(want) {
+        return want;
+    }
+    let mut best: Option<f32> = None;
+    for rect in boxes {
+        let rect = rect.expand(pad);
+        for candidate in [rect.left() - pad, rect.right() + pad] {
+            if blocked(candidate) {
+                continue;
+            }
+            if best.is_none_or(|b: f32| (candidate - want).abs() < (b - want).abs()) {
+                best = Some(candidate);
+            }
+        }
+    }
+    best.unwrap_or(want)
+}
+
 /// The strips of height that clear every node in a column.
 fn clear_intervals(rects: &[Rect], options: &RouteOptions) -> Vec<(f32, f32)> {
     let mut out = Vec::with_capacity(rects.len() + 1);
@@ -699,25 +843,6 @@ fn clear_intervals(rects: &[Rect], options: &RouteOptions) -> Vec<(f32, f32)> {
         cursor = cursor.max(rect.bottom() + options.margin);
     }
     out.push((cursor, f32::INFINITY));
-    out
-}
-
-/// The strips clear in both of two columns.
-fn intersect(a: &[(f32, f32)], b: &[(f32, f32)]) -> Vec<(f32, f32)> {
-    let (mut i, mut j) = (0, 0);
-    let mut out = Vec::new();
-    while i < a.len() && j < b.len() {
-        let lo = a[i].0.max(b[j].0);
-        let hi = a[i].1.min(b[j].1);
-        if hi > lo {
-            out.push((lo, hi));
-        }
-        if a[i].1 < b[j].1 {
-            i += 1;
-        } else {
-            j += 1;
-        }
-    }
     out
 }
 

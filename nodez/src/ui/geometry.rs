@@ -544,11 +544,20 @@ pub(crate) fn wire_control_points(
 
 /// How far a segment's control points reach out from its ends.
 fn segment_pull(from: Pos2, to: Pos2, style: &EditorStyle, zoom: f32) -> f32 {
-    let dx = (to.x - from.x).abs();
+    let dx = to.x - from.x;
     let dy = (to.y - from.y).abs();
-    (dx * style.wire_curvature)
+    let pull = (dx.abs() * style.wire_curvature)
         .max(viewport_scaled(style.wire_min_curve, zoom) + dy * 0.15)
-        .min(viewport_scaled(style.wire_max_curve, zoom))
+        .min(viewport_scaled(style.wire_max_curve, zoom));
+    // The floor above answers to the drop, not to the span, so a short wire
+    // between two distant heights used to ask for more reach than it had room
+    // for. Past a reach of `dx` the two handles cross over and the curve
+    // bulges back the way it came: work the derivative through and it is
+    // exactly `pull <= dx` that keeps the wire running one way.
+    //
+    // A wire that already runs backwards has no forward span to protect, and
+    // needs its full reach to throw the loop that gets it there.
+    if dx > 0.0 { pull.min(dx) } else { pull }
 }
 
 /// The cubic segments a wire is drawn from: one when it runs straight to its
