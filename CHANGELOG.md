@@ -8,13 +8,18 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-09-20
+
+Nothing in the crates changed. All three are things 0.4.0 went out without,
+and none of them could be added to a release already published.
+
 ### Added
 
 - `rust-version` on every crate, so an old toolchain says what it wants
-  instead of failing on syntax.
+  instead of failing on syntax it has never heard of.
 - docs.rs now builds with all features, so `derive` and `app` appear in the
-  published documentation rather than being left out.
-- This changelog.
+  published documentation rather than being left out of it.
+- This changelog, and tags on the releases that never got one.
 
 ## [0.4.0] — 2026-09-20
 
@@ -93,8 +98,9 @@ First release: a Blender-style node editor widget for egui, with a typed,
 traversable graph model, `#[derive(NodeType)]` for describing nodes as Rust
 types, and a ready-made editor window behind the `app` feature.
 
-[Unreleased]: https://github.com/ahenshaw/nodez/compare/v0.4.0...HEAD
-[0.4.0]: https://github.com/ahenshaw/nodez/releases/tag/v0.4.0
+[Unreleased]: https://github.com/ahenshaw/nodez/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/ahenshaw/nodez/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/ahenshaw/nodez/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/ahenshaw/nodez/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/ahenshaw/nodez/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ahenshaw/nodez/releases/tag/v0.1.0
