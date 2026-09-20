@@ -3,6 +3,7 @@ name = "nodez-demo"
 description = "Demonstration app for the nodez node editor: a visual generator for service-stack config files."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false

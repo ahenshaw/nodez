@@ -6,6 +6,9 @@ default-members = ["nodez-demo"]
 [workspace.package]
 version = "0.4.0"
 edition = "2024"
+# What egui 0.36 asks for. Our own code needs less — 1.88 for the derive's
+# let-chains, 1.85 for edition 2024 — but the floor is the floor.
+rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/ahenshaw/nodez"
 

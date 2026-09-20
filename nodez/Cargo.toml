@@ -5,9 +5,15 @@ keywords = ["egui", "node", "graph", "editor", "gui"]
 categories = ["gui"]
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 readme = "../README.md"
+
+# docs.rs builds default features only, which would leave `derive` and `app`
+# out of the published docs entirely.
+[package.metadata.docs.rs]
+all-features = true
 
 [features]
 default = ["serde"]
