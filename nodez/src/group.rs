@@ -238,6 +238,15 @@ impl NodeLibrary {
     pub fn is_group(&self, template: TemplateId) -> bool {
         self.groups.contains_key(&template)
     }
+
+    /// Lift a group's interior out of the library, to be edited and put back
+    /// with [`NodeLibrary::register_group`].
+    ///
+    /// Out rather than borrowed, because an editor showing the interior needs
+    /// the library at the same time to know what its nodes are.
+    pub fn take_group(&mut self, template: TemplateId) -> Option<Graph> {
+        self.groups.remove(&template)
+    }
 }
 
 /// Whether a graph uses the group called `id`, at any depth.
@@ -387,6 +396,183 @@ fn pad_nodes(inside: &Graph, library: &NodeLibrary, mapping: &HashMap<NodeId, No
         .flat_map(|template| inside.nodes_of_template(template))
         .filter_map(|node| mapping.get(&node.id).copied())
         .collect()
+}
+
+/// Make a group of a selection: take those nodes out of the graph, register
+/// them as a template, and leave one node in their place.
+///
+/// The pads come from the wires that crossed the selection's edge. One input
+/// pad per distinct socket outside that fed in — so two wires from one output
+/// share a pad, which is what makes the group take one wire where the
+/// selection took two — and one output pad per distinct socket inside that
+/// fed out.
+///
+/// Returns the node that stands in the graph for what was taken out.
+pub fn make_group(
+    outer: &mut Graph,
+    library: &mut NodeLibrary,
+    chosen: &HashSet<NodeId>,
+    id: &str,
+    label: &str,
+    category: &str,
+) -> Result<NodeId, GroupError> {
+    if chosen.is_empty() {
+        return Err(GroupError::NoPads);
+    }
+    let (pad_in, pad_out) = register_pads(library);
+
+    // The selection, copied into a graph of its own. Ids change, so everything
+    // after this goes through the mapping.
+    let mut inside = Graph::new();
+    let mut moved = HashMap::new();
+    let mut ids: Vec<NodeId> = chosen.iter().copied().collect();
+    ids.sort_unstable();
+    let mut middle = egui::Vec2::ZERO;
+    for id in &ids {
+        let Some(node) = outer.node(*id) else {
+            continue;
+        };
+        middle += node.position.to_vec2();
+        moved.insert(*id, inside.insert_node(node.clone()));
+    }
+    let middle = (middle / ids.len() as f32).to_pos2();
+
+    // The wires, sorted into the three kinds: wholly inside, crossing in, and
+    // crossing out.
+    let mut links: Vec<_> = outer
+        .connections()
+        .map(|c| (c.id, c.from.clone(), c.to.clone(), c.order))
+        .collect();
+    links.sort_by_key(|(id, _, _, _)| id.0);
+
+    let mut ways_in: Vec<(SocketRef, Vec<SocketRef>)> = Vec::new();
+    let mut ways_out: Vec<(SocketRef, Vec<(SocketRef, u32)>)> = Vec::new();
+    for (id, from, to, order) in &links {
+        let (source, target) = (chosen.contains(&from.node), chosen.contains(&to.node));
+        match (source, target) {
+            (true, true) => {
+                let (Some(&a), Some(&b)) = (moved.get(&from.node), moved.get(&to.node)) else {
+                    continue;
+                };
+                inside.rejoin(
+                    SocketRef::new(a, from.socket.clone()),
+                    SocketRef::new(b, to.socket.clone()),
+                    *order,
+                );
+            }
+            (false, true) => {
+                let Some(&b) = moved.get(&to.node) else {
+                    continue;
+                };
+                let landing = SocketRef::new(b, to.socket.clone());
+                match ways_in.iter_mut().find(|(outside, _)| outside == from) {
+                    Some((_, inner)) => inner.push(landing),
+                    None => ways_in.push((from.clone(), vec![landing])),
+                }
+            }
+            (true, false) => {
+                let Some(&a) = moved.get(&from.node) else {
+                    continue;
+                };
+                let leaving = SocketRef::new(a, from.socket.clone());
+                match ways_out.iter_mut().find(|(source, _)| *source == leaving) {
+                    Some((_, outside)) => outside.push((to.clone(), *order)),
+                    None => ways_out.push((leaving, vec![(to.clone(), *order)])),
+                }
+            }
+            (false, false) => {}
+        }
+        let _ = id;
+    }
+    if ways_in.is_empty() && ways_out.is_empty() {
+        return Err(GroupError::NoPads);
+    }
+
+    // A pad per way in and per way out, named after the socket it stands for
+    // and placed beside it so the order reads the way the picture does.
+    let mut taken: HashSet<String> = HashSet::new();
+    let mut inputs = Vec::new();
+    for (outside, landings) in &ways_in {
+        let at = landings
+            .first()
+            .and_then(|l| inside.node(l.node))
+            .map_or(middle, |n| n.position);
+        let name = spare(
+            &mut taken,
+            landings
+                .first()
+                .and_then(|l| socket_label(&inside, library, l, true))
+                .unwrap_or_else(|| "in".to_owned()),
+        );
+        let pad = inside.add_node(library, pad_in, egui::pos2(at.x - 200.0, at.y));
+        inside
+            .node_mut(pad)
+            .expect("just added")
+            .set_param(PAD_NAME, crate::value::Value::from(name.as_str()));
+        for landing in landings {
+            inside.rejoin(SocketRef::new(pad, "out"), landing.clone(), 0);
+        }
+        inputs.push((name, outside.clone()));
+    }
+    let mut outputs = Vec::new();
+    for (leaving, outsides) in &ways_out {
+        let at = inside.node(leaving.node).map_or(middle, |n| n.position);
+        let name = spare(
+            &mut taken,
+            socket_label(&inside, library, leaving, false).unwrap_or_else(|| "out".to_owned()),
+        );
+        let pad = inside.add_node(library, pad_out, egui::pos2(at.x + 200.0, at.y));
+        inside
+            .node_mut(pad)
+            .expect("just added")
+            .set_param(PAD_NAME, crate::value::Value::from(name.as_str()));
+        inside.rejoin(leaving.clone(), SocketRef::new(pad, "in"), 0);
+        outputs.push((name, outsides.clone()));
+    }
+
+    let template = library.register_group(id, label, category, inside)?;
+
+    // Out with the selection, in with the one node that stands for it.
+    for id in &ids {
+        outer.remove_node(*id);
+    }
+    let stand_in = outer.add_node(library, template, middle);
+    for (name, outside) in inputs {
+        outer.rejoin(outside, SocketRef::new(stand_in, name), 0);
+    }
+    for (name, outsides) in outputs {
+        for (target, order) in outsides {
+            outer.rejoin(SocketRef::new(stand_in, name.clone()), target, order);
+        }
+    }
+    Ok(stand_in)
+}
+
+/// What a socket is called, for naming the pad that stands for it.
+fn socket_label(
+    graph: &Graph,
+    library: &NodeLibrary,
+    socket: &SocketRef,
+    input: bool,
+) -> Option<String> {
+    let template = library.get(graph.node(socket.node)?.template)?;
+    let spec = if input {
+        template.input_spec(&socket.socket)?
+    } else {
+        template.output_spec(&socket.socket)?
+    };
+    Some(spec.display().to_owned())
+}
+
+/// A name nothing else has taken yet.
+fn spare(taken: &mut HashSet<String>, want: String) -> String {
+    let mut name = want.clone();
+    let mut n = 2;
+    while !taken.insert(name.clone()) {
+        name = format!("{want} {n}");
+        n += 1;
+    }
+    name
 }
 
 #[cfg(test)]
@@ -563,6 +749,93 @@ mod tests {
 
         let flat = graph.flatten(&library);
         assert_eq!(flat.node_count(), 3, "two texts and the join from two levels down");
+        let join = flat
+            .nodes()
+            .find(|n| library.expect(n.template).id == "join")
+            .unwrap();
+        assert!(flat.is_input_linked(join.id, "a"));
+        assert!(flat.is_input_linked(join.id, "b"));
+    }
+
+    /// Grouping a selection takes it out of the graph and leaves one node,
+    /// and flattening puts it all back.
+    #[test]
+    fn a_selection_becomes_a_group_and_comes_back_out_of_one() {
+        let (mut library, _) = library();
+        let mut graph = Graph::new();
+        let add = |graph: &mut Graph, id: &str| {
+            graph.add_node(&library, library.id(id).unwrap(), pos2(0.0, 0.0))
+        };
+        let one = add(&mut graph, "text");
+        let two = add(&mut graph, "text");
+        let join = add(&mut graph, "join");
+        let out = add(&mut graph, "sink");
+        graph.node_mut(one).unwrap().set_input_value("value", "kept");
+        graph.connect(&library, (one, "out"), (join, "a")).unwrap();
+        graph.connect(&library, (two, "out"), (join, "b")).unwrap();
+        graph.connect(&library, (join, "out"), (out, "value")).unwrap();
+
+        // Group the join alone: two wires in, one out.
+        let chosen = HashSet::from([join]);
+        let made = make_group(&mut graph, &mut library, &chosen, "pair", "Pair", "Group").unwrap();
+
+        assert_eq!(graph.node_count(), 4, "the join went, one group node came");
+        assert!(graph.node(join).is_none());
+        let template = library.expect(graph.node(made).unwrap().template);
+        assert_eq!(template.inputs.len(), 2, "one pad per socket that fed in");
+        assert_eq!(template.outputs.len(), 1);
+        // The wires that crossed the edge now meet the group node.
+        assert_eq!(graph.connection_count(), 3);
+        for socket in template.inputs.iter().map(|s| s.name.clone()) {
+            assert!(graph.is_input_linked(made, &socket), "`{socket}` lost its wire");
+        }
+
+        // And flattening is the exact inverse, as far as the picture goes.
+        let flat = graph.flatten(&library);
+        assert_eq!(flat.node_count(), 4);
+        assert_eq!(flat.connection_count(), 3);
+        let join = flat
+            .nodes()
+            .find(|n| library.expect(n.template).id == "join")
+            .unwrap();
+        assert!(flat.is_input_linked(join.id, "a"));
+        assert!(flat.is_input_linked(join.id, "b"));
+        let kept = flat
+            .nodes()
+            .filter_map(|n| n.input_value("value"))
+            .any(|v| v.as_str() == Some("kept"));
+        assert!(kept);
+    }
+
+    /// Two wires from one socket into the selection share a single pad, so
+    /// the group takes one wire where the selection took two.
+    #[test]
+    fn one_source_feeding_twice_makes_one_input() {
+        let (mut library, _) = library();
+        let mut graph = Graph::new();
+        let add = |graph: &mut Graph, id: &str| {
+            graph.add_node(&library, library.id(id).unwrap(), pos2(0.0, 0.0))
+        };
+        let source = add(&mut graph, "text");
+        let join = add(&mut graph, "join");
+        graph.connect(&library, (source, "out"), (join, "a")).unwrap();
+        graph.connect(&library, (source, "out"), (join, "b")).unwrap();
+
+        let made = make_group(
+            &mut graph,
+            &mut library,
+            &HashSet::from([join]),
+            "pair",
+            "Pair",
+            "Group",
+        )
+        .unwrap();
+        let template = library.expect(graph.node(made).unwrap().template);
+        assert_eq!(template.inputs.len(), 1, "one socket outside, one pad");
+        assert_eq!(graph.connection_count(), 1);
+
+        // And both wires are back inside once it is flattened.
+        let flat = graph.flatten(&library);
         let join = flat
             .nodes()
             .find(|n| library.expect(n.template).id == "join")

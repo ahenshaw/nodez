@@ -890,6 +890,57 @@ impl<N: NodeData> Graph<N> {
         mapping
     }
 
+    /// The same graph carrying a different payload.
+    ///
+    /// A payload is values keyed by the names in a template, and [`NodeData`]
+    /// is the whole of how they are read and written — so a graph can be
+    /// moved from one payload to another by copying what its templates name.
+    /// Node and connection ids come across unchanged, which is what lets a
+    /// selection survive the trip.
+    ///
+    /// What a payload keeps that its template does not mention does not come
+    /// across. That is the same bargain serialization makes.
+    pub fn convert<M: NodeData>(&self, library: &NodeLibrary) -> Graph<M> {
+        let mut out = Graph::<M> {
+            next_node: self.next_node,
+            next_connection: self.next_connection,
+            connections: self.connections.clone(),
+            templates: self.templates.clone(),
+            order: self.order.clone(),
+            ..Default::default()
+        };
+        for (id, node) in &self.nodes {
+            let Some(template) = library.get(node.template) else {
+                continue;
+            };
+            let mut data = M::new(template);
+            for socket in &template.inputs {
+                if let Some(value) = node.data.input_value(&socket.name) {
+                    data.set_input_value(&socket.name, value.into_owned());
+                }
+            }
+            for param in &template.params {
+                if let Some(value) = node.data.param(&param.name) {
+                    data.set_param(&param.name, value.into_owned());
+                }
+            }
+            out.nodes.insert(
+                *id,
+                Node {
+                    id: *id,
+                    template: node.template,
+                    title: node.title.clone(),
+                    position: node.position,
+                    width: node.width,
+                    collapsed: node.collapsed,
+                    muted: node.muted,
+                    data,
+                },
+            );
+        }
+        out
+    }
+
     /// Join two sockets without asking a library whether they may be joined.
     ///
     /// For rewiring links that were already valid — putting a group's

@@ -50,6 +50,16 @@ pub enum EditorAction {
     ParamChanged { node: NodeId, param: String },
     NodeRenamed(NodeId),
     SelectionChanged,
+    /// `Ctrl+G`: make a group of the selection. The editor has no library to
+    /// register one in, so it asks.
+    GroupSelection(Vec<NodeId>),
+    /// A node was double-clicked below its header: open what is inside it,
+    /// if it is a group. Sent for every node, because the editor has no
+    /// library to ask.
+    EnterGroup(NodeId),
+    /// `Escape` with nothing in flight: go back out of the group being
+    /// edited, if one is.
+    LeaveGroup,
     /// A drag was released on an incompatible socket.
     ConnectionRejected(ConnectError),
 }
@@ -349,6 +359,7 @@ impl NodeEditor {
     ) -> EditorResponse {
         let mut actions = Vec::new();
         self.last_screen = rect;
+
         let background = ui.allocate_rect(rect, Sense::click_and_drag());
         let base_id = ui.id().with("nodez");
         let editor_id = self.id.unwrap_or(base_id);
@@ -418,7 +429,7 @@ impl NodeEditor {
         );
         self.finish_link_drag(ui, hovered_socket.as_ref(), &viewport, &mut ops);
         self.handle_cut(ui, graph, &geoms, &viewport, &mut ops);
-        self.handle_keyboard(ui, &background, graph, &viewport, &mut ops);
+        self.handle_keyboard(ui, &background, graph, &viewport, &mut ops, &mut actions);
         self.run_grab(ui, graph, &mut actions);
 
         if let Some(menu_action) = self.show_menu(ui, editor_id, library) {
@@ -735,6 +746,22 @@ impl NodeEditor {
                 self.state.renaming = Some(geom.id);
                 self.state.rename_buffer = title.clone();
             }
+        }
+
+        // Double-clicking the body asks to open what is inside. Nothing here
+        // knows whether this node is a group; whoever holds the library does,
+        // and says so by doing nothing if it is not.
+        //
+        // Not `Tab`, which is what Blender uses and what this wanted to be:
+        // egui moves focus when it sees a Tab, before any widget is asked
+        // about it, so a Tab pressed over the canvas is spent before the
+        // canvas can hear it.
+        if response.double_clicked()
+            && !geom
+                .header
+                .contains(response.interact_pointer_pos().unwrap_or_default())
+        {
+            actions.push(EditorAction::EnterGroup(geom.id));
         }
 
         // Selection and dragging.
@@ -1609,6 +1636,7 @@ impl NodeEditor {
         graph: &Graph<N>,
         viewport: &Viewport,
         ops: &mut Vec<Op>,
+        actions: &mut Vec<EditorAction>,
     ) {
         // Never steal keys from a focused text field.
         if ui.memory(|m| m.focused()).is_some() || self.state.menu.is_some() {
@@ -1646,6 +1674,13 @@ impl NodeEditor {
                 Key::A if modifiers.alt => self.state.clear_selection(),
                 Key::A => self.state.selection = graph.node_ids().collect(),
                 Key::D if modifiers.shift => ops.push(Op::Duplicate),
+                Key::G if modifiers.command => {
+                    let mut chosen: Vec<NodeId> = self.state.selection.iter().copied().collect();
+                    chosen.sort_unstable();
+                    if !chosen.is_empty() {
+                        actions.push(EditorAction::GroupSelection(chosen));
+                    }
+                }
                 Key::G if self.state.interaction.is_idle() => {
                     if let Some(p) = pointer {
                         let origins = self.selection_positions(graph);
@@ -1663,6 +1698,11 @@ impl NodeEditor {
                 Key::Escape => {
                     if let Interaction::Grab { origins, .. } = &self.state.interaction {
                         ops.push(Op::RestorePositions(origins.clone()));
+                    }
+                    // With nothing in flight to cancel, Escape is the way
+                    // back out of a group.
+                    if self.state.interaction.is_idle() {
+                        actions.push(EditorAction::LeaveGroup);
                     }
                     self.state.cancel_interaction();
                 }

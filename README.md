@@ -440,6 +440,16 @@ line.
 A group that would contain itself is refused when it is registered, so nothing
 downstream has to guard against it.
 
+In the editor, `Ctrl+G` makes a group of the selection and leaves one node in
+its place, double-clicking a group node below its header opens what is inside,
+and `Escape` comes back out. A breadcrumb in the toolbar says where you are and
+takes you back. Leaving re-reads the interface off the pads, so adding a pad
+while you are inside adds a socket to every instance.
+
+Not `Tab`, which is what Blender uses and what this wanted to be: egui moves
+focus when it sees a Tab, before any widget is asked about it, so a Tab pressed
+over the canvas is spent before the canvas can hear it.
+
 ## Just the widget
 
 `EditorApp` is a window; `NodeEditor` is the canvas alone, for dropping into an

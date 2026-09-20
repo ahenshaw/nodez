@@ -108,6 +108,41 @@ pub struct EditorApp<N: NodeData = DynNode> {
     /// A template the palette asked to add, applied after the panel closes.
     pending_add: Option<TemplateId>,
     preview_extension: String,
+    /// The groups being edited, outermost first. Empty means the graph the
+    /// app was given.
+    inside: Vec<Opened<N>>,
+    /// What the editor asked for this frame, done once it has let go of the
+    /// graph.
+    pending_group: Wanted,
+}
+
+/// What the editor asked to do with a group.
+#[derive(Default)]
+enum Wanted {
+    #[default]
+    Nothing,
+    Group(Vec<NodeId>),
+    Enter(NodeId),
+    Leave,
+    /// Back out until only this many groups are open.
+    LeaveTo(usize),
+}
+
+impl Wanted {
+    fn group(nodes: &[NodeId]) -> Self {
+        Self::Group(nodes.to_vec())
+    }
+}
+
+/// A group opened for editing: which template it is, and the graph it was
+/// opened from.
+///
+/// The interior is taken out of the library while it is being edited and put
+/// back on the way out, which is what keeps the editor from having to borrow
+/// the library and one of its groups at the same time.
+struct Opened<N: NodeData> {
+    template: TemplateId,
+    outer: Graph<N>,
 }
 
 impl<N: NodeData> EditorApp<N> {
@@ -127,6 +162,8 @@ impl<N: NodeData> EditorApp<N> {
             frame_next: true,
             route_next: true,
             pending_add: None,
+            inside: Vec::new(),
+            pending_group: Wanted::Nothing,
             preview_extension: "out".to_owned(),
         }
     }
@@ -280,6 +317,7 @@ impl<N: NodeData> EditorApp<N> {
                 let rect = ui.available_rect_before_wrap();
                 self.editor.fit_to_graph(rect, &self.graph, &self.library);
             }
+            let mut wanted = Wanted::Nothing;
             let response = self.editor.show(ui, &self.library, &mut self.graph);
             if response.changed
                 && let Some(preview) = &self.preview
@@ -297,11 +335,28 @@ impl<N: NodeData> EditorApp<N> {
                 self.apply_routing();
             }
             for action in &response.actions {
-                if let EditorAction::ConnectionRejected(e) = action {
-                    self.status.error(e.to_string());
+                match action {
+                    EditorAction::ConnectionRejected(e) => self.status.error(e.to_string()),
+                    EditorAction::GroupSelection(nodes) => wanted = Wanted::group(nodes),
+                    EditorAction::EnterGroup(id) => wanted = Wanted::Enter(*id),
+                    EditorAction::LeaveGroup => wanted = Wanted::Leave,
+                    _ => {}
                 }
             }
+            self.pending_group = wanted;
         });
+
+        match std::mem::take(&mut self.pending_group) {
+            Wanted::Nothing => {}
+            Wanted::Group(nodes) => self.group_selection(&nodes),
+            Wanted::Enter(id) => self.enter_group(id),
+            Wanted::Leave => self.leave_group(),
+            Wanted::LeaveTo(depth) => {
+                while self.inside.len() > depth {
+                    self.leave_group();
+                }
+            }
+        }
 
         // Adding from the palette needs the graph, which the panel borrowed.
         // There is no cursor to place it under, so it goes in the first open
@@ -377,6 +432,38 @@ impl<N: NodeData> EditorApp<N> {
                     self.apply_routing();
                 }
                 ui.checkbox(&mut self.show_inspector, "Inspector");
+                // Where you are, when you are inside a group. Clicking a step
+                // goes back out to it.
+                if !self.inside.is_empty() {
+                    ui.separator();
+                    let mut back_to = None;
+                    if ui.link(&self.path).clicked() {
+                        back_to = Some(0);
+                    }
+                    let names: Vec<String> = self
+                        .inside
+                        .iter()
+                        .skip(1)
+                        .map(|open| self.library.expect(open.template).label.clone())
+                        .chain(std::iter::once(
+                            self.inside
+                                .last()
+                                .map(|open| self.library.expect(open.template).label.clone())
+                                .unwrap_or_default(),
+                        ))
+                        .collect();
+                    for (depth, name) in names.iter().enumerate() {
+                        ui.label(RichText::new("\u{203A}").weak());
+                        if depth + 1 == names.len() {
+                            ui.label(RichText::new(name).strong());
+                        } else if ui.link(name).clicked() {
+                            back_to = Some(depth + 1);
+                        }
+                    }
+                    if let Some(depth) = back_to {
+                        self.pending_group = Wanted::LeaveTo(depth);
+                    }
+                }
                 ui.checkbox(
                     &mut self.editor.style.show_missing_inputs,
                     "Unfilled",
@@ -654,7 +741,8 @@ impl<N: NodeData> EditorApp<N> {
                             "LMB select / box  \u{2022}  MMB or 2-finger pan  \
                              \u{2022}  wheel / ctrl+scroll zoom  \u{2022}  Shift+A add  \
                              \u{2022}  G grab  \u{2022}  X delete  \u{2022}  H collapse  \
-                             \u{2022}  M mute  \u{2022}  Ctrl+drag cut",
+                             \u{2022}  M mute  \u{2022}  Ctrl+drag cut  \
+                             \u{2022}  Ctrl+G group  \u{2022}  double-click to open",
                         )
                         .small()
                         .weak(),
@@ -662,6 +750,106 @@ impl<N: NodeData> EditorApp<N> {
                 });
             });
         });
+    }
+
+    // ------------------------------------------------------------- groups
+
+    /// Make a group of the selection, and leave one node in its place.
+    ///
+    /// The group's id has to be unique in the library and there is nobody to
+    /// ask for one, so it is numbered. Renaming the node renames what you see;
+    /// the id is only ever how the file refers to it.
+    fn group_selection(&mut self, nodes: &[NodeId]) {
+        let chosen: std::collections::HashSet<NodeId> = nodes.iter().copied().collect();
+        let mut n = 1;
+        let id = loop {
+            let id = format!("group_{n}");
+            if self.library.id(&id).is_none() {
+                break id;
+            }
+            n += 1;
+        };
+        let label = format!("Group {n}");
+
+        // The editor's graph carries whatever payload the app was built with;
+        // a group's interior is always the dynamic one, so the selection goes
+        // across by name and comes back the same way.
+        let mut flat = self.graph.convert::<crate::graph::DynNode>(&self.library);
+        match crate::group::make_group(&mut flat, &mut self.library, &chosen, &id, &label, "Group")
+        {
+            Ok(made) => {
+                self.graph = flat.convert::<N>(&self.library);
+                self.editor.state.clear_selection();
+                self.editor.state.selection.insert(made);
+                self.editor.state.active = Some(made);
+                self.status.info(format!("Grouped {} nodes as {label}", chosen.len()));
+                self.after_edit();
+            }
+            Err(e) => self.status.error(e.to_string()),
+        }
+    }
+
+    /// Open what is inside a group node.
+    fn enter_group(&mut self, at: NodeId) {
+        let Some(template) = self.graph.node(at).map(|node| node.template) else {
+            return;
+        };
+        // Most nodes are not groups; double-clicking one of those is not
+        // worth saying anything about.
+        let Some(inside) = self.library.take_group(template) else {
+            return;
+        };
+        let name = self.library.expect(template).label.clone();
+        let opened = inside.convert::<N>(&self.library);
+        let outer = std::mem::replace(&mut self.graph, opened);
+        self.inside.push(Opened { template, outer });
+        self.editor.state.clear_selection();
+        self.frame_next = true;
+        self.route_next = true;
+        self.status.info(format!("Editing {name}"));
+    }
+
+    /// Put the group being edited back, and return to what it was opened from.
+    fn leave_group(&mut self) {
+        let Some(Opened { template, outer }) = self.inside.pop() else {
+            return;
+        };
+        let (id, label, category) = {
+            let was = self.library.expect(template);
+            (was.id.clone(), was.label.clone(), was.category.clone())
+        };
+        let edited = std::mem::replace(&mut self.graph, outer)
+            .convert::<crate::graph::DynNode>(&self.library);
+
+        // Registering it again is what re-reads the interface off the pads.
+        // A socket that went takes its wires with it, which is what `validate`
+        // is for -- and what every other instance of the group needs too.
+        if let Err(e) = self
+            .library
+            .register_group(&id, &label, &category, edited)
+        {
+            self.status.error(format!("{label}: {e}"));
+        }
+        let repairs = self.graph.validate(&self.library);
+        if !repairs.is_clean() {
+            self.status.info(format!(
+                "{} wire(s) no longer had a socket to meet",
+                repairs.removed_connections
+            ));
+        }
+        self.editor.state.clear_selection();
+        self.frame_next = true;
+        self.after_edit();
+    }
+
+    /// What has to happen after the graph is rearranged from outside the
+    /// editor: the preview is stale and the wires are bent around nodes that
+    /// have gone.
+    fn after_edit(&mut self) {
+        if let Some(preview) = &self.preview {
+            self.generated = preview(&self.graph, &self.library);
+        }
+        self.apply_routing();
     }
 
     /// Route the wires, or straighten them, to match the Route box.

@@ -23,6 +23,15 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     traversal and generators carry on seeing a flat graph and need to know
     nothing about groups. A group that would contain itself is refused when it
     is registered.
+  - In the editor: `Ctrl+G` groups the selection, double-clicking a group node
+    below its header opens it, `Escape` comes back out, and a breadcrumb says
+    where you are. Leaving re-reads the interface off the pads, so every
+    instance picks up a socket added inside.
+  - `EditorAction` gains `GroupSelection`, `EnterGroup` and `LeaveGroup`. The
+    widget has no library to register a group in or look one up, so it asks.
+- `Graph::convert`, which moves a graph from one node payload to another by
+  copying what its templates name. It is what lets an editor on any payload
+  open a group, whose interior is always the dynamic one.
 - `Graph::absorb`, which copies another graph's nodes and wires into this one
   and says where each of them landed.
 - `Graph::name_templates`, which records what every template in a graph is
