@@ -8,6 +8,18 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-09-20
+
+Everything in this release came of looking at the same picture and asking why
+it read badly. The router learned that a wire costs something where it goes,
+not just how far: crossing another wire, and running hard against a node it is
+only passing. The layout stopped taking dependency depth for an answer and
+started solving for the shortest wires. And an input that has to be wired and
+is not now says so, which is a thing the schema always knew and never showed.
+
+On the demo's graph the wires cross sixteen times where they crossed
+eighty-six.
+
 ### Added
 
 - `SocketSpec::optional`, set by `#[derive(NodeType)]` for an `Option<T>`
@@ -26,7 +38,6 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `RouteOptions::hug`: what running hard against a node costs, per pixel of
   wire. Nothing is charged at a full clearance or beyond it — what is priced
   is the room a wire gives up, which is the room the reader loses.
-
 - `RouteOptions::cross`: what going over another wire costs the router, in the
   same pixels `bend` charges for a corner. Wire routes are now chosen by
   counting crossings as well as ground and corners, and the plain curve a wire
@@ -34,13 +45,17 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   across five other wires gives way to a route that drops to its socket's
   height first and crosses two. Building `RouteOptions` with
   `..Default::default()` picks the new field up.
+- Two examples that generate Python: `blender_nodes` writes the `bpy` script
+  for a shader tree, and `gnuradio` writes the top-block script for a
+  flowgraph. Both walk the graph rather than folding it, which is what a
+  generator wants from a graph that describes something rather than computes
+  something, and both take `--print` to run without a display.
 
 ### Changed
 
 - `route_links` routes every wire twice: once against the wires placed before
   it, and once more against the finished picture. The first pass cannot judge
   a detour, because the wires it is dodging into have not been placed yet.
-
 - **Breaking in effect, not in signature:** `layered` places nodes differently.
   A node's column is no longer its dependency depth: what comes out is the
   assignment that makes the wires shortest in total, found by network simplex
@@ -62,12 +77,6 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `route_links` no longer folds two grid lines a pixel apart into one. A pixel
   is wider than it sounds: where two nodes' edges are a pixel apart, one of
   the two lanes below them clears both and the other clears neither.
-
-- Two examples that generate Python: `blender_nodes` writes the `bpy` script
-  for a shader tree, and `gnuradio` writes the top-block script for a
-  flowgraph. Both walk the graph rather than folding it, which is what a
-  generator wants from a graph that describes something rather than computes
-  something, and both take `--print` to run without a display.
 
 ### Internal
 
@@ -166,7 +175,8 @@ First release: a Blender-style node editor widget for egui, with a typed,
 traversable graph model, `#[derive(NodeType)]` for describing nodes as Rust
 types, and a ready-made editor window behind the `app` feature.
 
-[Unreleased]: https://github.com/ahenshaw/nodez/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/ahenshaw/nodez/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/ahenshaw/nodez/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/ahenshaw/nodez/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/ahenshaw/nodez/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/ahenshaw/nodez/compare/v0.2.0...v0.3.0
