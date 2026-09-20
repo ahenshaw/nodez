@@ -11,6 +11,8 @@ mod style;
 mod widgets;
 #[cfg(test)]
 mod route_check;
+#[cfg(test)]
+mod stack_check;
 
 pub use geometry::{
     NodeGeometry, RowGeometry, RowKind, SocketGeometry, Viewport, free_position, node_size,

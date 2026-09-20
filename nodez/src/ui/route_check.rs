@@ -119,9 +119,23 @@ fn route(rng: &mut Rng) -> Routed {
     route_with(rng, 0.0)
 }
 
+/// The options the editor routes with.
+fn options(style: &EditorStyle) -> RouteOptions {
+    RouteOptions {
+        curvature: style.wire_curvature,
+        min_curve: style.wire_min_curve,
+        max_curve: style.wire_max_curve,
+        ..RouteOptions::default()
+    }
+}
+
 /// `jitter` shifts every node by up to that many pixels after layout, standing
 /// in for a user who dragged things about before asking for a re-route.
 fn route_with(rng: &mut Rng, jitter: f32) -> Routed {
+    route_costing(rng, jitter, RouteOptions::default().cross)
+}
+
+fn route_costing(rng: &mut Rng, jitter: f32, cross: f32) -> Routed {
     let (library, templates) = library();
     let mut graph = random_graph(rng, &library, &templates);
     let style = EditorStyle::default();
@@ -155,10 +169,8 @@ fn route_with(rng: &mut Rng, jitter: f32) -> Routed {
     route_links(
         &mut graph,
         &RouteOptions {
-            curvature: style.wire_curvature,
-            min_curve: style.wire_min_curve,
-            max_curve: style.wire_max_curve,
-            ..RouteOptions::default()
+            cross,
+            ..options(&style)
         },
         size,
         |g, socket, kind, slot| {
@@ -234,6 +246,63 @@ impl Routed {
             }
         }
         out
+    }
+
+    /// How many times one wire visibly goes over another, over the whole
+    /// picture.
+    ///
+    /// Counted per pair of wires and per place they meet, not per pair of
+    /// sampled segments: two wires running alongside each other touch at a
+    /// dozen samples and cross once, if at all. Where wires share a socket
+    /// they leave from or land on the same point, which is a fan rather than
+    /// a crossing, so the ends are discounted.
+    fn crossings(&self) -> usize {
+        self.graph
+            .connections()
+            .enumerate()
+            .map(|(i, conn)| {
+                // Each pair once: only the wires after this one in the list.
+                let later: Vec<_> = self.graph.connections().skip(i + 1).collect();
+                self.cuts(&self.drawn(conn), self.ends(conn), &later)
+            })
+            .sum()
+    }
+
+    /// How many of `others` a wire drawn along `points` between `ends` goes
+    /// over.
+    ///
+    /// Counted per wire and per place they meet, not per pair of sampled
+    /// segments: two wires running alongside each other touch at a dozen
+    /// samples and cross once, if at all. Where wires share a socket they
+    /// leave from or land on the same point, which is a fan rather than a
+    /// crossing, so the ends are discounted.
+    fn cuts(
+        &self,
+        points: &[Pos2],
+        (a, b): (Pos2, Pos2),
+        others: &[&crate::graph::Connection],
+    ) -> usize {
+        const APART: f32 = 12.0;
+        let margin = RouteOptions::default().margin;
+        let mut total = 0;
+        for other in others {
+            let (c, d) = self.ends(other);
+            let theirs = self.drawn(other);
+            let mut meetings: Vec<Pos2> = Vec::new();
+            for one in points.windows(2) {
+                for two in theirs.windows(2) {
+                    let Some(p) = crate::layout::meeting([one[0], one[1]], [two[0], two[1]]) else {
+                        continue;
+                    };
+                    let shared = [a, b, c, d].iter().any(|s| p.distance(*s) <= margin);
+                    if !shared && !meetings.iter().any(|q| q.distance(p) <= APART) {
+                        meetings.push(p);
+                    }
+                }
+            }
+            total += meetings.len();
+        }
+        total
     }
 }
 
@@ -369,10 +438,10 @@ fn a_wire_is_no_longer_than_the_obvious_way_round() {
             }
 
             // Out, along at a height clear of all of it, and in.
-            let by_way_of = |y: f32| {
-                (a.y - y).abs() + (hi - lo) + (y - b.y).abs() + margin * 2.0
-            };
-            let obvious = by_way_of(top - margin).min(by_way_of(bottom + margin));
+            let by_way_of = |y: f32| (a.y - y).abs() + (hi - lo) + (y - b.y).abs() + margin * 2.0;
+            let over_the_top = by_way_of(top - margin);
+            let under_the_bottom = by_way_of(bottom + margin);
+            let obvious = over_the_top.min(under_the_bottom);
 
             let mut drawn = a;
             let mut spent = 0.0;
@@ -384,13 +453,54 @@ fn a_wire_is_no_longer_than_the_obvious_way_round() {
             // The way round is measured along the top of the span and taken
             // on trust at the two ends, so it is a floor rather than a route
             // anyone could always draw. Corners cost the router something
-            // too, and keeping off another wire's line costs a little more.
-            // A sixth over the floor covers all of that; the failures this
-            // catches run to twice it and beyond.
-            let allowed = obvious * 7.0 / 6.0 + margin * 4.0;
-            if spent > allowed {
+            // too, keeping off another wire's line costs a little more, and
+            // wire is what it spends to keep out of another's way at all —
+            // which it decides on the picture as it finds it, not as the
+            // picture ends up. Half again over the floor covers all of that;
+            // the failures this catches run to twice it and beyond.
+            let allowed = obvious * 3.0 / 2.0 + margin * 4.0;
+            if spent <= allowed {
+                continue;
+            }
+
+            // Wire is not the only thing a route spends, and the way round
+            // is only cheap on length: it cuts across whatever happens to be
+            // between the two sockets. A wire that went further than the
+            // floor is allowed whatever the crossings it saved are worth,
+            // priced the way the router prices them. Worked out only for the
+            // wires that fail on length alone, because counting what every
+            // wire crosses over three hundred graphs is not quick.
+            let way_round = |y: f32| {
+                vec![
+                    a,
+                    pos2(a.x + margin, a.y),
+                    pos2(a.x + margin, y),
+                    pos2(b.x - margin, y),
+                    pos2(b.x - margin, b.y),
+                    b,
+                ]
+            };
+            let round = if over_the_top <= under_the_bottom {
+                way_round(top - margin)
+            } else {
+                way_round(bottom + margin)
+            };
+            let others: Vec<_> = case
+                .graph
+                .connections()
+                .filter(|other| other.id != conn.id)
+                .collect();
+            let ends = case.ends(conn);
+            let saved = case.cuts(&round, ends, &others).saturating_sub(case.cuts(
+                &case.drawn(conn),
+                ends,
+                &others,
+            ));
+            let cross = RouteOptions::default().cross;
+            if spent > allowed + saved as f32 * cross {
                 failures.push(format!(
-                    "seed {seed}: wire {:?} spends {spent:.0}px where {obvious:.0}px goes round",
+                    "seed {seed}: wire {:?} spends {spent:.0}px where {obvious:.0}px goes round, \
+                     and saves {saved} crossings doing it",
                     conn.id
                 ));
             }
@@ -591,4 +701,39 @@ fn routing_never_changes_the_graph() {
             .collect();
         assert_eq!(after, wires, "seed {seed}");
     }
+}
+
+/// Paying for crossings has to buy fewer of them.
+///
+/// Wire by wire the router can only be greedy — it prices what it can see —
+/// so the way to tell whether the price is worth paying is to route a spread
+/// of graphs both ways and count. Compared in total rather than graph by
+/// graph: a penalty that pays off across a sweep can still lose on one
+/// arrangement, and holding it to every single one would be holding it to
+/// something it never promised.
+#[test]
+fn paying_for_crossings_buys_fewer_of_them() {
+    // Fewer graphs than the other sweeps: counting what every wire crosses is
+    // quadratic in the wires and in their samples, where the checks that only
+    // ask about nodes are not.
+    const GRAPHS: u64 = 30;
+
+    let (mut free, mut priced, mut counted) = (0, 0, 0);
+    for seed in 1..=GRAPHS {
+        let without = route_costing(&mut Rng::new(seed), 0.0, 0.0);
+        let with = route_costing(&mut Rng::new(seed), 0.0, RouteOptions::default().cross);
+        if without.overlapping() {
+            continue;
+        }
+        free += without.crossings();
+        priced += with.crossings();
+        counted += 1;
+    }
+
+    assert!(counted * 2 >= GRAPHS, "only {counted} graphs were usable");
+    assert!(
+        priced < free,
+        "over {counted} graphs the router draws {priced} crossings when they cost \
+         something and {free} when they are free"
+    );
 }

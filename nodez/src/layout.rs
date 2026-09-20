@@ -360,6 +360,10 @@ pub struct RouteOptions {
     /// What a corner costs, against a pixel of wire. Higher buys straighter
     /// paths at the price of longer ones.
     pub bend: f32,
+    /// What going over a wire already drawn costs, in the same pixels. Higher
+    /// buys a picture that is easier to follow at the price of wire that goes
+    /// the long way round to keep out of another's way.
+    pub cross: f32,
     /// The wire shape the editor draws, so the router can tell whether a wire
     /// left alone would actually clear the nodes between its ends. These
     /// mirror `EditorStyle`'s `wire_curvature`, `wire_min_curve` and
@@ -375,6 +379,10 @@ impl Default for RouteOptions {
             margin: 16.0,
             spread: 7.0,
             bend: 40.0,
+            // Three corners' worth: enough that a wire will take the long way
+            // round a bundle, not so much that it tours the canvas to dodge
+            // one wire.
+            cross: 120.0,
             curvature: 0.5,
             min_curve: 30.0,
             max_curve: 180.0,
@@ -382,19 +390,27 @@ impl Default for RouteOptions {
     }
 }
 
-/// Steer wires around the nodes they would otherwise cross.
+/// Steer wires around the nodes, and around each other.
 ///
-/// A wire whose own curve already clears everything between its ends is left
-/// alone, so simple graphs keep their plain noodles. Anything else is given an
-/// orthogonal path found by search rather than by rule.
+/// A wire whose own curve already clears every node and goes over no other
+/// wire is left alone, so simple graphs keep their plain noodles. Anything
+/// else is given an orthogonal path found by search rather than by rule, and
+/// keeps the curve only if the curve still works out cheaper.
 ///
 /// The search runs over the grid of lines drawn a clearance out from every
 /// node's own four sides. An optimal orthogonal path can always be laid on
 /// those lines, so nothing is lost by looking only there, and a path is only
 /// ever built from segments that miss every node — a wire through a node is
 /// not something the search can express. Among the paths that exist it takes
-/// the cheapest, counting length plus a penalty per corner, which is what
-/// keeps a wire from touring the canvas to save a bend.
+/// the cheapest, counting length, a penalty per corner, and a penalty per
+/// wire already drawn that it goes over — which is what keeps a wire from
+/// touring the canvas to save a bend or a crossing.
+///
+/// Crossings are what a long diagonal costs and a plain length never shows: a
+/// wire that sets off straight for a socket far away and below cuts whatever
+/// runs between, where the same wire dropping to its socket's height first
+/// and running across meets almost nothing. Priced against length and corners,
+/// the router picks whichever actually reads better.
 ///
 /// Wires are routed in turn, each preferring to keep off the segments already
 /// spoken for, so a bundle running the same way spreads into its own lines
@@ -434,64 +450,41 @@ pub fn route_links<N: NodeData>(
         .collect();
     links.sort_by_key(|(id, _, _, _)| id.0);
 
-    // Every stretch of line a wire has already claimed. Later wires pay a
-    // little to share one, which is what fans a bundle out.
-    let mut taken: Vec<Run> = Vec::new();
+    // Routed twice over. The first pass has only the wires before it to keep
+    // out of the way of, which is enough to fan a bundle but not enough to
+    // judge a detour: a wire that goes the long way round to dodge three
+    // crossings can land squarely in front of six wires not placed yet. The
+    // second pass sees the whole picture and each wire answers to all of it.
+    const PASSES: usize = 2;
+
     let mut plans: Vec<Plan> = Vec::new();
+    for pass in 0..PASSES {
+        for (at, (id, from, to, slot)) in links.iter().enumerate() {
+            // Everything except this wire's own last go at it.
+            let others = claims(&plans, at);
 
-    for (id, from, to, slot) in links {
-        let (Some(from_rect), Some(to_rect)) = (rects.get(&from.node), rects.get(&to.node)) else {
-            plans.push(Plan::straight(id));
-            continue;
-        };
-        let a = anchor_of(graph, &from, SocketKind::Output, None)
-            .unwrap_or_else(|| pos2(from_rect.right(), from_rect.center().y));
-        let b = anchor_of(graph, &to, SocketKind::Input, Some(slot))
-            .unwrap_or_else(|| pos2(to_rect.left(), to_rect.center().y));
+            // A link to a node that is not there has nowhere to be routed;
+            // it has no shape either, so nothing else has to mind it.
+            let (Some(from_rect), Some(to_rect)) = (rects.get(&from.node), rects.get(&to.node))
+            else {
+                keep(&mut plans, pass, at, Plan::straight(*id, Vec::new()));
+                continue;
+            };
+            let a = anchor_of(graph, from, SocketKind::Output, None)
+                .unwrap_or_else(|| pos2(from_rect.right(), from_rect.center().y));
+            let b = anchor_of(graph, to, SocketKind::Input, Some(*slot))
+                .unwrap_or_else(|| pos2(to_rect.left(), to_rect.center().y));
 
-        // A wire may pass over the two nodes it belongs to; it has to, to
-        // reach a socket on them.
-        let obstacles: Vec<Rect> = rects
-            .iter()
-            .filter(|(id, _)| **id != from.node && **id != to.node)
-            .map(|(_, rect)| *rect)
-            .collect();
+            // A wire may pass over the two nodes it belongs to; it has to, to
+            // reach a socket on them.
+            let obstacles: Vec<Rect> = rects
+                .iter()
+                .filter(|(id, _)| **id != from.node && **id != to.node)
+                .map(|(_, rect)| *rect)
+                .collect();
 
-        if direct_is_clear(a, b, &obstacles, options) {
-            plans.push(Plan::straight(id));
-            continue;
-        }
-
-        // A wire hemmed in on all sides may have no path at a full clearance
-        // and an obvious one at half. Asked for less each time, rather than
-        // given up on: a wire drawn tight past a node beats one drawn
-        // through it.
-        // Tried at a full clearance first, then at less, and only then with
-        // the rule against turning back lifted — a wire that jogs the wrong
-        // way for a moment still beats one drawn through a node, and a wire
-        // boxed in on every side is the only one that ever needs to.
-        let found = [options.margin, options.margin * 0.5, 2.0]
-            .into_iter()
-            .flat_map(|pad| [(pad, true), (pad, false)])
-            .find_map(|(pad, onward)| {
-                search(a, b, &obstacles, &taken, pad, onward, options).map(|path| (path, pad))
-            });
-        match found {
-            // Nothing orthogonal gets there either. The plain curve at least
-            // says where the wire goes.
-            None => plans.push(Plan::straight(id)),
-            Some((path, clearance)) => {
-                // Straight away, so everything downstream sees whole
-                // stretches rather than the string of grid steps they were
-                // found as. Fanning one step out of a run would kink it.
-                let path = simplify(&path);
-                taken.extend(runs(&path).filter(Run::real));
-                plans.push(Plan {
-                    link: id,
-                    path,
-                    clearance,
-                });
-            }
+            let plan = plan_link(*id, a, b, &obstacles, &others, options);
+            keep(&mut plans, pass, at, plan);
         }
     }
 
@@ -501,6 +494,7 @@ pub fn route_links<N: NodeData>(
         link,
         path,
         clearance,
+        ..
     } in plans
     {
         let path = guard_corners(&path, clearance);
@@ -517,10 +511,114 @@ pub fn route_links<N: NodeData>(
     Ok(())
 }
 
+/// How one wire gets from `a` to `b`, given what the others are doing.
+fn plan_link(
+    link: ConnectionId,
+    a: Pos2,
+    b: Pos2,
+    obstacles: &[Rect],
+    others: &Claims,
+    options: &RouteOptions,
+) -> Plan {
+    // What the plain curve would cost, if it can be drawn at all: how far it
+    // runs, and how many wires it goes over on the way.
+    let curve = curve_points(a, b, options);
+    let plain = clears(&curve, obstacles, options).then(|| {
+        (
+            length(&curve),
+            crossings(&curve, &others.drawn, a, b, options),
+        )
+    });
+
+    // A curve that clears the nodes and cuts across nothing is already the
+    // best this wire could do, and the search would only find something
+    // longer. This is also the fast path, and the one every wire in an
+    // uncrowded graph takes.
+    if let Some((_, 0)) = plain {
+        return Plan::straight(link, curve);
+    }
+
+    // A wire hemmed in on all sides may have no path at a full clearance and
+    // an obvious one at half. Asked for less each time, rather than given up
+    // on: a wire drawn tight past a node beats one drawn through it.
+    // Tried at a full clearance first, then at less, and only then with the
+    // rule against turning back lifted — a wire that jogs the wrong way for a
+    // moment still beats one drawn through a node, and a wire boxed in on
+    // every side is the only one that ever needs to.
+    let found = [options.margin, options.margin * 0.5, 2.0]
+        .into_iter()
+        .flat_map(|pad| [(pad, true), (pad, false)])
+        .find_map(|(pad, onward)| {
+            search(a, b, obstacles, others, pad, onward, options).map(|route| (route, pad))
+        });
+
+    // The route and the curve are priced in the same pixels, so which of them
+    // a wire gets is a comparison rather than a rule: a route has to save
+    // enough crossings to pay for the ground and the corners it spends doing
+    // it.
+    match found {
+        // Nothing orthogonal gets there either. The plain curve at least says
+        // where the wire goes.
+        None => Plan::straight(link, curve),
+        Some(((path, cost), clearance)) => {
+            if plain.is_some_and(|(len, over)| len + over as f32 * options.cross <= cost) {
+                return Plan::straight(link, curve);
+            }
+            // Straightened away, so everything downstream sees whole
+            // stretches rather than the string of grid steps they were found
+            // as. Fanning one step out of a run would kink it.
+            let path = simplify(&path);
+            Plan {
+                link,
+                shape: path.clone(),
+                path,
+                clearance,
+            }
+        }
+    }
+}
+
+/// Put a plan where it belongs: appended on the first pass over the wires,
+/// and in place of the last one on every pass after it.
+fn keep(plans: &mut Vec<Plan>, pass: usize, at: usize, plan: Plan) {
+    if pass == 0 {
+        plans.push(plan);
+    } else {
+        plans[at] = plan;
+    }
+}
+
+/// What the other wires have claimed.
+struct Claims {
+    /// Every stretch of line they run along. A wire pays a little to share
+    /// one, which is what fans a bundle out.
+    taken: Vec<Run>,
+    /// Every wire as it will actually be drawn, curve or route. A wire pays
+    /// rather more to go over one.
+    drawn: Vec<[Pos2; 2]>,
+}
+
+/// What every wire but one has claimed.
+fn claims(plans: &[Plan], except: usize) -> Claims {
+    let mut taken = Vec::new();
+    let mut drawn = Vec::new();
+    for (at, plan) in plans.iter().enumerate() {
+        if at == except {
+            continue;
+        }
+        taken.extend(runs(&plan.path).filter(Run::real));
+        drawn.extend(legs(&plan.shape));
+    }
+    Claims { taken, drawn }
+}
+
 /// One wire's route, and how much room it was found with.
 struct Plan {
     link: ConnectionId,
     path: Vec<Pos2>,
+    /// The wire as the editor will draw it, route or curve, so the wires
+    /// routed around it know where it actually runs.
+    shape: Vec<Pos2>,
     /// The clearance the path keeps from every node, which is as far as any
     /// of it may later be nudged.
     clearance: f32,
@@ -528,10 +626,11 @@ struct Plan {
 
 impl Plan {
     /// A wire left to its own curve.
-    fn straight(link: ConnectionId) -> Self {
+    fn straight(link: ConnectionId, curve: Vec<Pos2>) -> Self {
         Self {
             link,
             path: Vec::new(),
+            shape: curve,
             clearance: 0.0,
         }
     }
@@ -580,8 +679,8 @@ fn shares(a: &Run, b: &Run, options: &RouteOptions) -> bool {
     a.across == b.across && (a.line - b.line).abs() < options.spread && a.hi > b.lo && b.hi > a.lo
 }
 
-/// The cheapest orthogonal path from one socket to the other, or nothing if
-/// the sockets cannot be joined without crossing a node.
+/// The cheapest orthogonal path from one socket to the other and what it
+/// cost, or nothing if the sockets cannot be joined without crossing a node.
 ///
 /// The wire leaves and arrives along its own height: the first and last steps
 /// are across, so it meets each socket the way a socket expects to be met.
@@ -589,12 +688,11 @@ fn search(
     a: Pos2,
     b: Pos2,
     obstacles: &[Rect],
-    taken: &[Run],
+    others: &Claims,
     pad: f32,
     onward: bool,
     options: &RouteOptions,
-) -> Option<Vec<Pos2>> {
-
+) -> Option<(Vec<Pos2>, f32)> {
     // The lines to search: a clearance outside each node's sides, plus the
     // two sockets' own row and column so the path can start and finish.
     //
@@ -642,6 +740,12 @@ fn search(
         return None;
     }
 
+    // Where the wires already drawn cut each of those lines, worked out once
+    // per line rather than once per step: a step is as short as the grid is
+    // fine and there are thousands of them, where there are only ever a few
+    // dozen lines.
+    let over = Crossings::new(&xs, &ys, &others.drawn, a, b, options.margin);
+
     let (w, h) = (xs.len(), ys.len());
     let at = |x: f32, xs: &[f32]| xs.iter().position(|v| (v - x).abs() < f32::EPSILON);
     let (sx, sy) = (at(a.x, &xs)?, at(a.y, &ys)?);
@@ -673,7 +777,7 @@ fn search(
         // A surcharge on the stretch shared, not a toll per step: steps are
         // as short as the grid is fine, and charging each one would price a
         // long run out of its own best line entirely.
-        if taken.iter().any(|run| shares(run, &step, options)) {
+        if others.taken.iter().any(|run| shares(run, &step, options)) {
             (hi - lo) * 0.25
         } else {
             0.0
@@ -700,6 +804,7 @@ fn search(
     let goal = state(gx, gy, true);
     while let Some(Step { state: here, .. }) = queue.pop() {
         if here == goal {
+            let cost = best[here];
             let mut path = vec![b];
             let mut walk = here;
             while let Some(prev) = came[walk] {
@@ -708,7 +813,7 @@ fn search(
                 walk = prev;
             }
             path.reverse();
-            return Some(path);
+            return Some((path, cost));
         }
         let cell = here / 2;
         let (x, y, across) = (cell % w, cell / w, here % 2 == 1);
@@ -757,7 +862,9 @@ fn search(
             } else {
                 crowding[x] * (hi - lo) * 0.5
             };
-            let cost = sofar + (hi - lo) + turn + hug + toll(moving, line, lo, hi);
+            // What it crosses, on the line it is crossing them on.
+            let cut = over.on(moving, if moving { y } else { x }, lo, hi) as f32 * options.cross;
+            let cost = sofar + (hi - lo) + turn + hug + cut + toll(moving, line, lo, hi);
             let next = state(nx, ny, moving);
             if cost < best[next] {
                 best[next] = cost;
@@ -797,9 +904,20 @@ fn gap_centers(rects: &[&Rect]) -> Vec<f32> {
 /// in total, and a corner is only charged where the direction actually
 /// changes, so nothing is lost by not reaching every line at once — and the
 /// search stays small enough to run on every wire.
-fn neighbours(x: usize, y: usize, w: usize, h: usize) -> impl Iterator<Item = (usize, usize, bool)> {
-    let across = [(x + 1 < w).then(|| (x + 1, y, true)), (x > 0).then(|| (x - 1, y, true))];
-    let down = [(y + 1 < h).then(|| (x, y + 1, false)), (y > 0).then(|| (x, y - 1, false))];
+fn neighbours(
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+) -> impl Iterator<Item = (usize, usize, bool)> {
+    let across = [
+        (x + 1 < w).then(|| (x + 1, y, true)),
+        (x > 0).then(|| (x - 1, y, true)),
+    ];
+    let down = [
+        (y + 1 < h).then(|| (x, y + 1, false)),
+        (y > 0).then(|| (x, y - 1, false)),
+    ];
     across.into_iter().chain(down).flatten()
 }
 
@@ -1022,21 +1140,142 @@ fn allowed(path: &[Pos2], legs: &[Run], at: usize, want: f32, clearance: f32) ->
     if lo > hi { 0.0 } else { want.clamp(lo, hi) }
 }
 
-/// Whether the curve the editor would draw between two sockets already clears
-/// everything in its way.
-fn direct_is_clear(a: Pos2, b: Pos2, obstacles: &[Rect], options: &RouteOptions) -> bool {
+/// The curve the editor would draw between two sockets, as the run of short
+/// segments everything here measures it by.
+fn curve_points(a: Pos2, b: Pos2, options: &RouteOptions) -> Vec<Pos2> {
     let pull = ((b.x - a.x).abs() * options.curvature)
         .max(options.min_curve + (b.y - a.y).abs() * 0.15)
         .min(options.max_curve);
     let points = [a, pos2(a.x + pull, a.y), pos2(b.x - pull, b.y), b];
 
     const SAMPLES: usize = 48;
-    (0..=SAMPLES).all(|i| {
-        let p = cubic(&points, i as f32 / SAMPLES as f32);
-        !obstacles
+    (0..=SAMPLES)
+        .map(|i| cubic(&points, i as f32 / SAMPLES as f32))
+        .collect()
+}
+
+/// The straight segments a run of points is made of.
+fn legs(points: &[Pos2]) -> impl Iterator<Item = [Pos2; 2]> + '_ {
+    points.windows(2).map(|leg| [leg[0], leg[1]])
+}
+
+fn length(points: &[Pos2]) -> f32 {
+    legs(points).map(|leg| leg[0].distance(leg[1])).sum()
+}
+
+/// Whether a wire drawn along these points clears every node in its way.
+fn clears(points: &[Pos2], obstacles: &[Rect], options: &RouteOptions) -> bool {
+    !points.iter().any(|p| {
+        obstacles
             .iter()
-            .any(|rect| rect.expand(options.margin * 0.5).contains(p))
+            .any(|rect| rect.expand(options.margin * 0.5).contains(*p))
     })
+}
+
+/// How many of the wires already drawn a wire along these points goes over.
+pub(crate) fn crossings(
+    points: &[Pos2],
+    drawn: &[[Pos2; 2]],
+    a: Pos2,
+    b: Pos2,
+    options: &RouteOptions,
+) -> usize {
+    legs(points)
+        .map(|leg| {
+            drawn
+                .iter()
+                .filter(|other| {
+                    meeting(leg, **other).is_some_and(|p| !fanning(p, a, b, options.margin))
+                })
+                .count()
+        })
+        .sum()
+}
+
+/// Where two segments cross, if they do.
+///
+/// Half open at one end of each, so two segments meeting at a shared corner
+/// are counted once rather than by both of the halves that meet there.
+pub(crate) fn meeting(one: [Pos2; 2], two: [Pos2; 2]) -> Option<Pos2> {
+    let (r, s) = (one[1] - one[0], two[1] - two[0]);
+    let denominator = r.x * s.y - r.y * s.x;
+    if denominator.abs() < f32::EPSILON {
+        return None;
+    }
+    let gap = two[0] - one[0];
+    let t = (gap.x * s.y - gap.y * s.x) / denominator;
+    let u = (gap.x * r.y - gap.y * r.x) / denominator;
+    ((0.0..1.0).contains(&t) && (0.0..1.0).contains(&u)).then(|| one[0] + r * t)
+}
+
+/// Whether a meeting point is only where wires fan out of a socket they
+/// share. Every wire off one output leaves from the same place; that they
+/// touch there says nothing about where either of them goes.
+fn fanning(p: Pos2, a: Pos2, b: Pos2, pad: f32) -> bool {
+    p.distance(a) <= pad || p.distance(b) <= pad
+}
+
+/// Where the wires already drawn cut each line the search may run along.
+struct Crossings {
+    /// For each x line, the heights at which a wire cuts it, sorted.
+    down: Vec<Vec<f32>>,
+    /// For each y line, the same across.
+    across: Vec<Vec<f32>>,
+}
+
+impl Crossings {
+    fn new(xs: &[f32], ys: &[f32], drawn: &[[Pos2; 2]], a: Pos2, b: Pos2, pad: f32) -> Self {
+        let mut down = vec![Vec::new(); xs.len()];
+        let mut across = vec![Vec::new(); ys.len()];
+        // Only the wires running through the ground this search covers can be
+        // crossed by anything it finds.
+        let (Some(&left), Some(&right), Some(&top), Some(&bottom)) =
+            (xs.first(), xs.last(), ys.first(), ys.last())
+        else {
+            return Self { down, across };
+        };
+        let ground = Rect::from_min_max(pos2(left, top), pos2(right, bottom));
+
+        for &[p, q] in drawn {
+            if !Rect::from_two_pos(p, q).intersects(ground) {
+                continue;
+            }
+            // Half open, so a wire whose own corner sits exactly on a line is
+            // counted by one of the two segments that meet there, not both.
+            for (i, &x) in xs.iter().enumerate() {
+                if (p.x <= x) != (q.x <= x) {
+                    let y = p.y + (q.y - p.y) * (x - p.x) / (q.x - p.x);
+                    if !fanning(pos2(x, y), a, b, pad) {
+                        down[i].push(y);
+                    }
+                }
+            }
+            for (i, &y) in ys.iter().enumerate() {
+                if (p.y <= y) != (q.y <= y) {
+                    let x = p.x + (q.x - p.x) * (y - p.y) / (q.y - p.y);
+                    if !fanning(pos2(x, y), a, b, pad) {
+                        across[i].push(x);
+                    }
+                }
+            }
+        }
+        for line in down.iter_mut().chain(&mut across) {
+            line.sort_by(f32::total_cmp);
+        }
+        Self { down, across }
+    }
+
+    /// How many wires a step along one of the lines goes over.
+    fn on(&self, moving: bool, index: usize, lo: f32, hi: f32) -> usize {
+        let line = if moving {
+            &self.across[index]
+        } else {
+            &self.down[index]
+        };
+        // Half open again, so a wire crossed exactly where two steps meet is
+        // charged to one of them rather than to both.
+        line.partition_point(|&at| at < hi) - line.partition_point(|&at| at < lo)
+    }
 }
 
 fn cubic(points: &[Pos2; 4], t: f32) -> Pos2 {

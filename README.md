@@ -326,10 +326,20 @@ nodez::route_links(&mut graph, &RouteOptions::default(), size_of, anchor_of)?;
 multi-input. Ignore it and every wire past the first is routed to the wrong
 one.
 
-A wire whose own curve already clears everything in its way is left alone, so
-simple graphs keep their plain noodles. Anything else crosses every column in
-its way at a single height, picked clear of all of them and, where it can be,
-level with one end — so a routed wire bends twice at most, and often once.
+A wire whose own curve already clears every node and goes over no other wire
+is left alone, so simple graphs keep their plain noodles. Anything else is
+given an orthogonal path, found by searching the grid of lines a clearance out
+from every node's sides for the cheapest way through. Three things cost: the
+ground the wire covers, each corner it turns (`bend`), and each wire already
+drawn that it goes over (`cross`). The curve is priced in the same pixels, so
+a wire keeps its noodle unless a route works out cheaper — which is what stops
+a long diagonal being drawn straight across five other wires when dropping to
+its socket's height first would cross two.
+
+Every wire is routed twice: once against the wires before it, and again
+against the finished picture, so a wire that went the long way round to dodge
+three crossings is not left sitting in front of six that had not been placed
+yet.
 
 Wires sharing a height are fanned apart across the run, and wires sharing a
 channel each get their own line down it, as far as the channel allows. A

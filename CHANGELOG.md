@@ -8,6 +8,22 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- `RouteOptions::cross`: what going over another wire costs the router, in the
+  same pixels `bend` charges for a corner. Wire routes are now chosen by
+  counting crossings as well as ground and corners, and the plain curve a wire
+  would otherwise keep is priced the same way — so a long diagonal that cuts
+  across five other wires gives way to a route that drops to its socket's
+  height first and crosses two. Building `RouteOptions` with
+  `..Default::default()` picks the new field up.
+
+### Changed
+
+- `route_links` routes every wire twice: once against the wires placed before
+  it, and once more against the finished picture. The first pass cannot judge
+  a detour, because the wires it is dodging into have not been placed yet.
+
 ## [0.4.1] — 2026-09-20
 
 Nothing in the crates changed. All three are things 0.4.0 went out without,
