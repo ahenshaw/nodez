@@ -604,16 +604,37 @@ fn search(
     // trimming the lines can only cost a wire a better path, never let it
     // through something.
     let (near_lo, near_hi) = (a.x.min(b.x) - pad * 6.0, a.x.max(b.x) + pad * 6.0);
+    let near: Vec<&Rect> = obstacles
+        .iter()
+        .filter(|rect| rect.right() >= near_lo && rect.left() <= near_hi)
+        .collect();
     let (mut loose_x, mut loose_y) = (vec![a.x + pad, b.x - pad], Vec::new());
-    for rect in obstacles {
-        if rect.right() < near_lo || rect.left() > near_hi {
-            continue;
-        }
+    for rect in &near {
         loose_x.extend([rect.left() - pad, rect.right() + pad]);
         loose_y.extend([rect.top() - pad, rect.bottom() + pad]);
     }
+    // And down the middle of every clear gap between the nodes. A wire has to
+    // change height somewhere, and the open middle of a gap is the civil place
+    // to do it: hard against a node's side it crowds that node's sockets, and
+    // the node has nothing to do with the wire.
+    loose_x.extend(gap_centers(&near));
     let xs = tidy(&[a.x, b.x], &loose_x);
     let ys = tidy(&[a.y, b.y], &loose_y);
+
+    // How hemmed in each line is, so the search can prefer a roomy one. Every
+    // way across costs the same length, so without this the choice of line is
+    // settled by nothing at all.
+    let elbow = pad * 3.0;
+    let crowding: Vec<f32> = xs
+        .iter()
+        .map(|&x| {
+            let room = near
+                .iter()
+                .map(|rect| (rect.left() - x).max(x - rect.right()).max(0.0))
+                .fold(f32::INFINITY, f32::min);
+            1.0 - (room / elbow).clamp(0.0, 1.0)
+        })
+        .collect();
 
     // A dense enough graph can ask for more grid than the search is worth.
     const CELLS: usize = 40_000;
@@ -729,7 +750,14 @@ fn search(
                 continue;
             }
             let turn = if moving == across { 0.0 } else { options.bend };
-            let cost = sofar + (hi - lo) + turn + toll(moving, line, lo, hi);
+            // Running down a line that hugs a node costs a little more than
+            // running down one in the open.
+            let hug = if moving {
+                0.0
+            } else {
+                crowding[x] * (hi - lo) * 0.5
+            };
+            let cost = sofar + (hi - lo) + turn + hug + toll(moving, line, lo, hi);
             let next = state(nx, ny, moving);
             if cost < best[next] {
                 best[next] = cost;
@@ -742,6 +770,24 @@ fn search(
         }
     }
     None
+}
+
+/// The middle of each clear stretch of x between the nodes.
+///
+/// Their sides give the lines that hug them; this gives the lines that do not.
+fn gap_centers(rects: &[&Rect]) -> Vec<f32> {
+    let mut spans: Vec<(f32, f32)> = rects.iter().map(|r| (r.left(), r.right())).collect();
+    spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+    let mut out = Vec::new();
+    let mut filled = f32::NEG_INFINITY;
+    for (left, right) in spans {
+        if left > filled && filled.is_finite() {
+            out.push((filled + left) * 0.5);
+        }
+        filled = filled.max(right);
+    }
+    out
 }
 
 /// The four lines a step can reach from here, and whether reaching one means
