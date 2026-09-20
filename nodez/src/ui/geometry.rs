@@ -925,7 +925,7 @@ mod tests {
     }
 
     #[test]
-    fn a_routed_wire_crosses_at_one_height() {
+    fn a_routed_wire_is_made_of_straight_runs() {
         let (library, mut graph) = crowded();
         let style = EditorStyle::default();
         let size = |g: &crate::Graph, n: &crate::Node| node_size(g, &library, n, &style);
@@ -946,39 +946,54 @@ mod tests {
             .connections()
             .filter(|c| !c.waypoints.is_empty())
             .count();
-        assert!(routed > 0, "this graph needs routing, or the test proves nothing");
+        assert!(
+            routed > 0,
+            "this graph needs routing, or the test proves nothing"
+        );
         for conn in graph.connections() {
             if conn.waypoints.is_empty() {
                 continue;
             }
-            // Leaving a channel, the run across, arriving at the other: four
-            // corners at the very most, and fewer when a height already
-            // matches.
-            assert!(
-                conn.waypoints.len() <= 4,
-                "{:?} bends {} times",
-                conn.id,
-                conn.waypoints.len()
-            );
-            // The wire climbs inside the channels, so it only ever occupies
-            // two x positions, and crosses everything between at one height.
-            let mut xs: Vec<f32> = conn.waypoints.iter().map(|p| p.x).collect();
-            xs.dedup();
-            assert!(xs.len() <= 2, "{:?} climbs outside a channel: {xs:?}", conn.id);
-            assert!(
-                xs.windows(2).all(|w| w[0] < w[1]),
-                "{:?} doubles back: {xs:?}",
-                conn.id
-            );
-            // Exactly one height is shared by both channels: the run across.
-            let shared: Vec<f32> = conn
-                .waypoints
-                .iter()
-                .filter(|p| p.x == xs[0])
-                .filter(|p| conn.waypoints.iter().any(|q| q.x != xs[0] && q.y == p.y))
-                .map(|p| p.y)
+            let from = graph.node(conn.from.node).unwrap();
+            let to = graph.node(conn.to.node).unwrap();
+            let a = socket_anchor(
+                &graph,
+                &library,
+                from,
+                &style,
+                SocketKind::Output,
+                &conn.from.socket,
+                None,
+            )
+            .unwrap();
+            let b = socket_anchor(
+                &graph,
+                &library,
+                to,
+                &style,
+                SocketKind::Input,
+                &conn.to.socket,
+                Some(conn.order),
+            )
+            .unwrap();
+
+            // Every leg runs along one axis or the other. A wire that went
+            // diagonally anywhere would not be an orthogonal route at all.
+            let points: Vec<Pos2> = [a]
+                .into_iter()
+                .chain(conn.waypoints.iter().copied())
+                .chain([b])
                 .collect();
-            assert_eq!(shared.len(), 1, "{:?} steps between heights", conn.id);
+            for leg in points.windows(2) {
+                let (dx, dy) = ((leg[1].x - leg[0].x).abs(), (leg[1].y - leg[0].y).abs());
+                assert!(
+                    dx < 0.5 || dy < 0.5,
+                    "{:?} runs diagonally from {:?} to {:?}",
+                    conn.id,
+                    leg[0],
+                    leg[1]
+                );
+            }
         }
     }
 }

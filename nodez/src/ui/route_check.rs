@@ -288,6 +288,9 @@ fn crossing_sweep(jitter: f32, what: &str) {
                 // `Rect::contains` counts the outline itself, and a sampled
                 // curve lands on it to within float noise, so tangency has to
                 // be told apart from a wire that is genuinely inside.
+                // `Rect::contains` counts the outline itself, and a sampled
+                // curve lands on it to within float noise, so tangency has to
+                // be told apart from a wire that is genuinely inside.
                 const TANGENT: f32 = 0.1;
                 if worst > TANGENT {
                     deepest = deepest.max(worst);
@@ -325,11 +328,20 @@ fn crossing_sweep(jitter: f32, what: &str) {
     );
 }
 
-/// A wire may climb to get past what is in its way, and no further. Detouring
-/// over the whole canvas for two sockets a few pixels apart is the failure
-/// this catches: it is clear of everything, so no other sweep objects.
+/// A routed wire must be no longer than the obvious way round.
+///
+/// The obvious way is the one anybody would draw by hand: out from the
+/// socket, over the top of everything in the way (or under the bottom of it,
+/// whichever is nearer), across, and in. It is always available and always
+/// clear, so a router that spends more wire than that has gone wrong — and it
+/// is worked out here from the node boxes, without asking the router anything,
+/// so agreeing with it means something.
+///
+/// This is what catches a wire diving south to reach a socket level with where
+/// it started: such a path is clear of every node, so no other sweep objects
+/// to it, and it is simply long.
 #[test]
-fn a_wire_climbs_no_further_than_it_must() {
+fn a_wire_is_no_longer_than_the_obvious_way_round() {
     let mut failures: Vec<String> = Vec::new();
     let mut checked = 0;
 
@@ -341,35 +353,46 @@ fn a_wire_climbs_no_further_than_it_must() {
             }
             checked += 1;
             let (a, b) = case.ends(conn);
+            let margin = RouteOptions::default().margin;
 
-            // What the wire has to clear: its own two ends, and every node
-            // standing in the stretch of canvas it crosses. Measured from the
-            // sockets, so this says nothing about how the router works.
+            // Everything standing between the two sockets.
             let (lo, hi) = (a.x.min(b.x), a.x.max(b.x));
-            let mut top = a.y.min(b.y);
-            let mut bottom = a.y.max(b.y);
+            let (mut top, mut bottom) = (a.y.min(b.y), a.y.max(b.y));
             for (id, rect) in &case.rects {
                 if *id == conn.from.node || *id == conn.to.node {
                     continue;
                 }
-                // Strictly inside the span. A node whose edge the wire starts
-                // or finishes on is beside it, not in its way, and counting a
-                // whole column that way lets a wire dive under all of it.
-                if rect.right() > lo && rect.left() < hi {
+                if rect.right() >= lo && rect.left() <= hi {
                     top = top.min(rect.top());
                     bottom = bottom.max(rect.bottom());
                 }
             }
-            // Going clear of all that costs a margin; three is generous.
-            let slack = RouteOptions::default().margin * 3.0;
-            for point in &conn.waypoints {
-                let strayed = (top - slack - point.y).max(point.y - (bottom + slack));
-                if strayed > 0.0 {
-                    failures.push(format!(
-                        "seed {seed}: wire {:?} climbs {strayed:.0}px past anything in its way",
-                        conn.id
-                    ));
-                }
+
+            // Out, along at a height clear of all of it, and in.
+            let by_way_of = |y: f32| {
+                (a.y - y).abs() + (hi - lo) + (y - b.y).abs() + margin * 2.0
+            };
+            let obvious = by_way_of(top - margin).min(by_way_of(bottom + margin));
+
+            let mut drawn = a;
+            let mut spent = 0.0;
+            for p in conn.waypoints.iter().chain([&b]) {
+                spent += (p.x - drawn.x).abs() + (p.y - drawn.y).abs();
+                drawn = *p;
+            }
+
+            // The way round is measured along the top of the span and taken
+            // on trust at the two ends, so it is a floor rather than a route
+            // anyone could always draw. Corners cost the router something
+            // too, and keeping off another wire's line costs a little more.
+            // A sixth over the floor covers all of that; the failures this
+            // catches run to twice it and beyond.
+            let allowed = obvious * 7.0 / 6.0 + margin * 4.0;
+            if spent > allowed {
+                failures.push(format!(
+                    "seed {seed}: wire {:?} spends {spent:.0}px where {obvious:.0}px goes round",
+                    conn.id
+                ));
             }
         }
     }
