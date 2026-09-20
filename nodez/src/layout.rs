@@ -21,7 +21,10 @@ pub struct LayoutOptions {
     pub row_gap: f32,
     /// Where the top-left of the laid-out graph ends up.
     pub origin: Pos2,
-    /// Crossing-reduction sweeps. Zero keeps nodes in id order.
+    /// How many passes are spent tidying: ordering each column so its wires
+    /// cross as little as possible, then sliding each node to the height of
+    /// what it is wired to. Zero leaves nodes in id order and each column
+    /// centred.
     pub sweeps: usize,
 }
 
@@ -36,8 +39,19 @@ impl Default for LayoutOptions {
     }
 }
 
-/// Lay the graph out in columns, one per dependency depth, and center each
-/// column vertically.
+/// Lay the graph out left to right in columns, each node as near as it can be
+/// to the things it is wired to.
+///
+/// A node's column is bounded by dependency — nothing may sit level with or
+/// left of what feeds it — but within those bounds it slides to the middle of
+/// its neighbours rather than as far left as it can go. Depth alone strands
+/// every source node in one tall first column, a whole graph away from the
+/// one node each of them feeds; sliding them along is what puts an image node
+/// beside the service that uses it.
+///
+/// Heights are settled the same way: each node wants to be level with the
+/// average of what it is wired to, and each column is packed in that order
+/// around that average, so a wire between two columns is close to straight.
 ///
 /// `size_of` supplies each node's drawn size. It is handed the graph as well as
 /// the node so it can call [`crate::node_size`], which needs both:
@@ -56,7 +70,7 @@ pub fn layered<N: NodeData>(
     options: &LayoutOptions,
     size_of: impl Fn(&Graph<N>, &Node<N>) -> Vec2,
 ) -> Result<(), CycleError> {
-    let depths = graph.depths()?;
+    let depths = columns_of(graph)?;
     if depths.is_empty() {
         return Ok(());
     }
@@ -93,31 +107,195 @@ pub fn layered<N: NodeData>(
         x += width + options.column_gap;
     }
 
-    let mut heights: Vec<Vec<f32>> = Vec::with_capacity(column_count);
-    let mut column_height = Vec::with_capacity(column_count);
-    for column in &columns {
-        let hs: Vec<f32> = column
+    // Every column centred to start with, which is where they all stay if no
+    // passes are asked for.
+    let column_height = |column: &[NodeId]| {
+        column
             .iter()
-            .filter_map(|id| sizes.get(id).map(|size| size.y))
-            .collect();
-        let total =
-            hs.iter().sum::<f32>() + options.row_gap * (hs.len().saturating_sub(1)) as f32;
-        heights.push(hs);
-        column_height.push(total);
+            .filter_map(|id| sizes.get(id))
+            .map(|size| size.y)
+            .sum::<f32>()
+            + options.row_gap * (column.len().saturating_sub(1)) as f32
+    };
+    let tallest = columns
+        .iter()
+        .map(|column| column_height(column))
+        .fold(0.0_f32, f32::max);
+
+    let mut tops: HashMap<NodeId, f32> = HashMap::new();
+    for column in &columns {
+        let mut y = (tallest - column_height(column)) * 0.5;
+        for id in column {
+            tops.insert(*id, y);
+            y += sizes.get(id).map_or(0.0, |size| size.y) + options.row_gap;
+        }
     }
-    let tallest = column_height.iter().copied().fold(0.0_f32, f32::max);
+
+    settle_heights(graph, &columns, &sizes, &mut tops, options);
+
+    // The settling moves whole columns about, so where the graph ends up is
+    // only known now. `origin` is where its top-left corner goes.
+    let top = tops.values().copied().fold(f32::INFINITY, f32::min);
+    let shift = if top.is_finite() {
+        options.origin.y - top
+    } else {
+        0.0
+    };
 
     for (c, column) in columns.iter().enumerate() {
-        let mut y = options.origin.y + (tallest - column_height[c]) * 0.5;
-        for (r, id) in column.iter().enumerate() {
+        for id in column {
             if let Some(node) = graph.node_mut(*id) {
-                node.position = pos2(column_x[c], y);
+                node.position = pos2(column_x[c], tops[id] + shift);
             }
-            y += heights[c].get(r).copied().unwrap_or(0.0) + options.row_gap;
         }
     }
 
     Ok(())
+}
+
+/// Which column each node sits in.
+///
+/// Dependency depth says only how early a node *may* be, and taking it at its
+/// word puts every source in the first column — an image node a whole graph
+/// away from the one service that uses it, with a wire the width of the
+/// canvas to show for it. So depth is only the starting point: each node then
+/// slides to the middle of everything it is wired to, as far as its own
+/// neighbours allow it to go, until a pass changes nothing.
+///
+/// What comes out still respects dependency — a node is never level with or
+/// left of what feeds it — because the range it may slide within is exactly
+/// what its neighbours leave it.
+fn columns_of<N: NodeData>(graph: &Graph<N>) -> Result<HashMap<NodeId, usize>, CycleError> {
+    let mut at = graph.depths()?;
+    if at.is_empty() {
+        return Ok(at);
+    }
+    let order = graph.topological_order()?;
+    let deepest = at.values().copied().max().unwrap_or(0);
+
+    // A node only moves as far as its neighbours have moved already, so a run
+    // of them shuffles along one pass at a time and the passes alternate
+    // direction to let a run move either way. The loop stops as soon as a
+    // pass changes nothing, which on the graphs this was built for is well
+    // before the cap.
+    const ROUNDS: usize = 8;
+    for round in 0..ROUNDS {
+        let mut moved = false;
+        let sweep: Vec<NodeId> = if round % 2 == 0 {
+            order.iter().rev().copied().collect()
+        } else {
+            order.clone()
+        };
+        for id in sweep {
+            let (before, after) = (graph.predecessors(id), graph.successors(id));
+            // As far left and as far right as it may go without drawing level
+            // with anything it is wired to.
+            let lo = before
+                .iter()
+                .filter_map(|p| at.get(p))
+                .map(|c| c + 1)
+                .max()
+                .unwrap_or(0);
+            let hi = after
+                .iter()
+                .filter_map(|s| at.get(s))
+                .map(|c| c.saturating_sub(1))
+                .min()
+                .unwrap_or(deepest);
+            if lo > hi {
+                continue;
+            }
+            // The middle of what it is wired to, rather than the average: one
+            // far-off neighbour should not drag a node away from the handful
+            // it sits among.
+            let mut want: Vec<usize> = before
+                .iter()
+                .chain(&after)
+                .filter_map(|n| at.get(n).copied())
+                .collect();
+            if want.is_empty() {
+                continue;
+            }
+            want.sort_unstable();
+            let middle = want[want.len() / 2].clamp(lo, hi);
+            if at.insert(id, middle) != Some(middle) {
+                moved = true;
+            }
+        }
+        if !moved {
+            break;
+        }
+    }
+
+    // Sliding can empty a column, and an empty column is a blank stripe down
+    // the middle of the picture.
+    let mut used: Vec<usize> = at.values().copied().collect();
+    used.sort_unstable();
+    used.dedup();
+    let packed: HashMap<usize, usize> = used.iter().enumerate().map(|(i, &c)| (c, i)).collect();
+    Ok(at.into_iter().map(|(id, c)| (id, packed[&c])).collect())
+}
+
+/// Slide each column's nodes to the height of what they are wired to.
+///
+/// A column centred on the canvas puts every node in it nowhere in
+/// particular; a node level with the socket it feeds makes its wire a
+/// straight line. Each pass asks every node where it would like to be — the
+/// average height of its neighbours — orders its column by that, and packs
+/// the column back together in that order around the average of the wishes.
+/// Packing is what keeps nodes from overlapping; the ordering is what keeps
+/// the column from having to cross itself to grant them.
+fn settle_heights<N: NodeData>(
+    graph: &Graph<N>,
+    columns: &[Vec<NodeId>],
+    sizes: &HashMap<NodeId, Vec2>,
+    tops: &mut HashMap<NodeId, f32>,
+    options: &LayoutOptions,
+) {
+    let height = |id: &NodeId| sizes.get(id).map_or(0.0, |size| size.y);
+    for round in 0..options.sweeps {
+        // Either way along the graph, so a column answers to the one before
+        // it as often as to the one after.
+        let sweep: Vec<usize> = if round % 2 == 0 {
+            (0..columns.len()).collect()
+        } else {
+            (0..columns.len()).rev().collect()
+        };
+        for c in sweep {
+            let column = &columns[c];
+            if column.is_empty() {
+                continue;
+            }
+            let centre = |id: NodeId, tops: &HashMap<NodeId, f32>| {
+                tops.get(&id).copied().unwrap_or(0.0) + height(&id) * 0.5
+            };
+            let mut wishes: Vec<(f32, NodeId)> = column
+                .iter()
+                .map(|&id| {
+                    let mut neighbours = graph.predecessors(id);
+                    neighbours.extend(graph.successors(id));
+                    let want = if neighbours.is_empty() {
+                        centre(id, tops)
+                    } else {
+                        neighbours.iter().map(|&n| centre(n, tops)).sum::<f32>()
+                            / neighbours.len() as f32
+                    };
+                    (want, id)
+                })
+                .collect();
+            // Ties by id, so the same graph settles the same way twice.
+            wishes.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+
+            let total = column.iter().map(height).sum::<f32>()
+                + options.row_gap * (column.len().saturating_sub(1)) as f32;
+            let mean = wishes.iter().map(|(want, _)| want).sum::<f32>() / wishes.len() as f32;
+            let mut y = mean - total * 0.5;
+            for (_, id) in &wishes {
+                tops.insert(*id, y);
+                y += height(id) + options.row_gap;
+            }
+        }
+    }
 }
 
 /// One crossing-reduction sweep: order each column by the mean row of the
@@ -539,17 +717,32 @@ fn plan_link(
     }
 
     // A wire hemmed in on all sides may have no path at a full clearance and
-    // an obvious one at half. Asked for less each time, rather than given up
+    // an obvious one at half, so it is offered less room rather than given up
     // on: a wire drawn tight past a node beats one drawn through it.
-    // Tried at a full clearance first, then at less, and only then with the
-    // rule against turning back lifted — a wire that jogs the wrong way for a
-    // moment still beats one drawn through a node, and a wire boxed in on
-    // every side is the only one that ever needs to.
-    let found = [options.margin, options.margin * 0.5, 2.0]
+    //
+    // All three clearances are searched and the cheapest route taken, not the
+    // first that works. Room to spare is worth something but it is not worth
+    // everything, and insisting on it can send a wire the width of the canvas
+    // to get round what it could have squeezed past — which costs the reader
+    // far more than the gap it bought.
+    const CLEARANCES: [f32; 3] = [1.0, 0.5, 0.125];
+    let room = |scale: f32| (options.margin * scale).max(2.0);
+    let found = CLEARANCES
         .into_iter()
-        .flat_map(|pad| [(pad, true), (pad, false)])
-        .find_map(|(pad, onward)| {
-            search(a, b, obstacles, others, pad, onward, options).map(|route| (route, pad))
+        .filter_map(|scale| {
+            let pad = room(scale);
+            search(a, b, obstacles, others, pad, true, options).map(|route| (route, pad))
+        })
+        .min_by(|(one, _), (two, _)| one.1.total_cmp(&two.1))
+        // And only then with the rule against turning back lifted — a wire
+        // that jogs the wrong way for a moment still beats one drawn through
+        // a node, and a wire boxed in on every side is the only one that ever
+        // needs to.
+        .or_else(|| {
+            CLEARANCES.into_iter().find_map(|scale| {
+                let pad = room(scale);
+                search(a, b, obstacles, others, pad, false, options).map(|route| (route, pad))
+            })
         });
 
     // The route and the curve are priced in the same pixels, so which of them
@@ -921,14 +1114,23 @@ fn neighbours(
     across.into_iter().chain(down).flatten()
 }
 
-/// The lines to search, sorted, with any two closer than a wire could tell
-/// apart folded into one.
+/// The lines to search, sorted, with duplicates folded into one.
 ///
 /// The sockets' own lines are kept exactly as given and everything else gives
 /// way to them: a socket is where it is, and a line a fraction of a pixel off
 /// one would have the wire arrive a fraction of a pixel off its socket.
+///
+/// Only lines the wire could not be drawn between are folded, though, and a
+/// pixel is wider than that. Two nodes whose bottom edges are a pixel apart
+/// give two lanes below them, one of which clears both and one of which
+/// clears neither; folding the clear one into a socket's line a fraction away
+/// loses the only way past, and the wire goes the long way round instead.
 fn tidy(sockets: &[f32], loose: &[f32]) -> Vec<f32> {
-    const APART: f32 = 1.0;
+    // Wide enough that a step between two lines survives [`simplify`]. A step
+    // dropped as a doubled point takes its end with it, and the step that
+    // followed it is left setting off from where the wire has not got to —
+    // which is how a wire ends up leaving its socket sideways.
+    const APART: f32 = CLOSE * 1.5;
     let mut out = sockets.to_vec();
     out.sort_by(f32::total_cmp);
     out.dedup_by(|a, b| (*a - *b).abs() < f32::EPSILON);
@@ -945,6 +1147,10 @@ fn tidy(sockets: &[f32], loose: &[f32]) -> Vec<f32> {
     out.sort_by(f32::total_cmp);
     out
 }
+
+/// Two points closer together than this are the same point: a wire drawn
+/// through both would show one.
+const CLOSE: f32 = 0.5;
 
 /// A wire's place in the search queue, cheapest first.
 struct Step {
@@ -1290,7 +1496,6 @@ fn cubic(points: &[Pos2; 4], t: f32) -> Pos2 {
 /// Drop waypoints that say nothing: a corner that doubles a neighbor, or one
 /// that sits in the middle of a straight run.
 fn simplify(points: &[Pos2]) -> Vec<Pos2> {
-    const CLOSE: f32 = 0.5;
     let Some((&last, rest)) = points.split_last() else {
         return Vec::new();
     };

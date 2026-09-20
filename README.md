@@ -282,9 +282,19 @@ library that has since changed.
 
 ## Arranging nodes
 
-`nodez::layered` arranges a whole graph into dependency columns — good for one
-built in code, or for tidying up after a load. `align` and `distribute` work on
-a handful of nodes instead, and are what the editor's `RMB` → Align menu calls.
+`nodez::layered` arranges a whole graph into columns — good for one built in
+code, or for tidying up after a load. `align` and `distribute` work on a
+handful of nodes instead, and are what the editor's `RMB` → Align menu calls.
+
+Dependency fixes which column a node *may* be in, not which one it is in.
+Taking depth at its word puts every source node in one tall first column, a
+whole graph away from the one node each of them feeds; instead each node
+slides along to the middle of everything it is wired to, as far as its
+neighbours allow, so an image node ends up beside the service that uses it.
+Heights are settled the same way — each node wants to be level with the
+average of its neighbours, and each column is packed in that order — so a wire
+between two columns is close to straight. `sweeps` says how many passes to
+spend on both; zero leaves nodes in id order with each column centred.
 
 ```rust
 nodez::align(&mut graph, editor.state.selection(), nodez::Align::Left, size_of);

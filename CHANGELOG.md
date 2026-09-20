@@ -24,6 +24,20 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   it, and once more against the finished picture. The first pass cannot judge
   a detour, because the wires it is dodging into have not been placed yet.
 
+- **Breaking in effect, not in signature:** `layered` places nodes differently.
+  A node's column is no longer its dependency depth but the middle of what it
+  is wired to, within the range depth allows, and heights are settled towards
+  each node's neighbours rather than by centring each column. Code calling it
+  is unaffected; the positions that come out are not. On the demo's graph the
+  wires cross 21 times where they used to cross 86.
+- `route_links` searches every clearance and takes the cheapest route rather
+  than the first that works. Room to spare is worth something but not
+  everything, and insisting on it could send a wire the width of the canvas
+  round what it could have squeezed past.
+- `route_links` no longer folds two grid lines a pixel apart into one. A pixel
+  is wider than it sounds: where two nodes' edges are a pixel apart, one of
+  the two lanes below them clears both and the other clears neither.
+
 ### Internal
 
 - The demo's stack graph is a routing fixture, in two arrangements: the one

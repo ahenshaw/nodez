@@ -590,6 +590,75 @@ fn layered_layout_sorts_into_columns() {
     assert!(x(b) < x(c));
 }
 
+/// A node sits as near as it can to what it is wired to, not as early as
+/// dependency lets it.
+///
+/// `text` feeds only the last `join` of a chain. Placed by depth alone it
+/// would sit in the first column with the head of that chain, a whole graph
+/// away from the one node it feeds, with a wire across everything to show
+/// for it.
+#[test]
+fn a_node_sits_beside_what_it_feeds() {
+    let f = fixture();
+    let mut graph = Graph::new();
+    let head = graph.add_node(&f.library, f.text, pos2(0.0, 0.0));
+    let one = graph.add_node(&f.library, f.join, pos2(0.0, 0.0));
+    let two = graph.add_node(&f.library, f.join, pos2(0.0, 0.0));
+    let three = graph.add_node(&f.library, f.join, pos2(0.0, 0.0));
+    let out = graph.add_node(&f.library, f.sink, pos2(0.0, 0.0));
+    // The one that has no business being in the first column.
+    let late = graph.add_node(&f.library, f.text, pos2(0.0, 0.0));
+
+    for (from, to) in [(head, one), (one, two), (two, three)] {
+        graph.connect(&f.library, (from, "out"), (to, "parts")).unwrap();
+    }
+    graph.connect(&f.library, (three, "out"), (out, "value")).unwrap();
+    graph.connect(&f.library, (late, "out"), (three, "parts")).unwrap();
+
+    nodez::layered(&mut graph, &LayoutOptions::default(), |_graph, _node| {
+        egui::vec2(160.0, 80.0)
+    })
+    .unwrap();
+
+    let x = |id| graph.node(id).unwrap().position.x;
+    assert_eq!(
+        x(late),
+        x(two),
+        "the late input is in the column before the node it feeds"
+    );
+    assert!(
+        x(late) > x(head),
+        "and well clear of the first column it used to be stranded in"
+    );
+}
+
+/// And it lands level with the average of what it is wired to, so the wires
+/// between two columns are close to straight.
+#[test]
+fn a_node_lands_level_with_what_feeds_it() {
+    let f = fixture();
+    let mut graph = Graph::new();
+    let a = graph.add_node(&f.library, f.text, pos2(0.0, 0.0));
+    let b = graph.add_node(&f.library, f.text, pos2(0.0, 0.0));
+    let both = graph.add_node(&f.library, f.join, pos2(0.0, 0.0));
+    graph.connect(&f.library, (a, "out"), (both, "parts")).unwrap();
+    graph.connect(&f.library, (b, "out"), (both, "parts")).unwrap();
+
+    nodez::layered(&mut graph, &LayoutOptions::default(), |_graph, _node| {
+        egui::vec2(160.0, 80.0)
+    })
+    .unwrap();
+
+    let middle = |id| graph.node(id).unwrap().position.y + 40.0;
+    assert!(
+        (middle(both) - (middle(a) + middle(b)) / 2.0).abs() < 0.5,
+        "{} is not halfway between {} and {}",
+        middle(both),
+        middle(a),
+        middle(b)
+    );
+}
+
 #[cfg(feature = "serde")]
 #[test]
 fn graphs_round_trip_through_json() {
