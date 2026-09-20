@@ -288,13 +288,15 @@ handful of nodes instead, and are what the editor's `RMB` → Align menu calls.
 
 Dependency fixes which column a node *may* be in, not which one it is in.
 Taking depth at its word puts every source node in one tall first column, a
-whole graph away from the one node each of them feeds; instead each node
-slides along to the middle of everything it is wired to, as far as its
-neighbours allow, so an image node ends up beside the service that uses it.
-Heights are settled the same way — each node wants to be level with the
-average of its neighbours, and each column is packed in that order — so a wire
-between two columns is close to straight. `sweeps` says how many passes to
-spend on both; zero leaves nodes in id order with each column centred.
+whole graph away from the one node each of them feeds. What `layered` picks
+instead is the assignment that makes the wires as short as they can be in
+total — solved exactly, by network simplex, not approached by sliding nodes
+about — so an image node ends up beside the service that uses it. Heights are
+settled separately and by eye: each node wants to be level with the average of
+its neighbours, and each column is packed in that order, so a wire between two
+columns is close to straight. `sweeps` says how many passes to spend on the
+ordering and the heights; zero leaves nodes in id order with each column
+centred.
 
 ```rust
 nodez::align(&mut graph, editor.state.selection(), nodez::Align::Left, size_of);

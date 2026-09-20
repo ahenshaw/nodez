@@ -42,11 +42,19 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   a detour, because the wires it is dodging into have not been placed yet.
 
 - **Breaking in effect, not in signature:** `layered` places nodes differently.
-  A node's column is no longer its dependency depth but the middle of what it
-  is wired to, within the range depth allows, and heights are settled towards
-  each node's neighbours rather than by centring each column. Code calling it
-  is unaffected; the positions that come out are not. On the demo's graph the
-  wires cross 21 times where they used to cross 86.
+  A node's column is no longer its dependency depth: what comes out is the
+  assignment that makes the wires shortest in total, found by network simplex
+  (Gansner, Koutsofios, North and Vo, 1993 — the layer assignment `dot` uses),
+  and heights are settled towards each node's neighbours rather than by
+  centring each column. Code calling it is unaffected; the positions that come
+  out are not. On the demo's graph the wires cross 16 times where they used to
+  cross 86; over a hundred generated graphs the wires span 2125 columns where
+  dependency depth alone spans 2199, and cross 1168 times rather than 1238.
+- `route_links` ranks the lines it searches: a line a node's clearance asks
+  for now outranks one that is merely a convenient place to set off from, so
+  when two fall within a pixel of each other the one there is a reason for
+  survives. Dropping the other way round could leave a wire no way past a node
+  at all, and it drew straight through it instead.
 - `route_links` searches every clearance and takes the cheapest route rather
   than the first that works. Room to spare is worth something but not
   everything, and insisting on it could send a wire the width of the canvas

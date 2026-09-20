@@ -9,6 +9,8 @@
 //! wire can have every waypoint in open space and still cut a node in half on
 //! the segment between two of them.
 
+use std::cmp::Ordering;
+
 use egui::{Pos2, Rect, pos2};
 
 use super::geometry::{bezier_point, wire_path};
@@ -788,3 +790,76 @@ fn a_routed_wire_mostly_keeps_its_clearance() {
          to a node they are only passing"
     );
 }
+
+/// No node could be moved to a different column and shorten the picture.
+///
+/// Which is the whole of what the layering is for, and is exactly checkable.
+/// Moving one node right by a column lengthens every wire coming into it and
+/// shortens every wire leaving it, so a node with more weight behind it than
+/// ahead belongs as far left as its neighbours allow, one with more ahead
+/// belongs as far right, and one evenly balanced may sit anywhere between.
+/// Anything else is wire spent for nothing.
+///
+/// This is necessary rather than sufficient — a ranking no single move can
+/// improve is still only a local optimum, and what the solver promises is the
+/// global one. It is what catches a solver that has quietly stopped solving.
+#[test]
+fn no_node_is_in_a_column_that_wastes_wire() {
+    const GRAPHS: u64 = 100;
+    let mut failures: Vec<String> = Vec::new();
+    let mut checked = 0;
+
+    for seed in 1..=GRAPHS {
+        let case = route_with(&mut Rng::new(seed), 0.0);
+
+        // Columns, read back off the layout: nodes in one share an x.
+        let mut xs: Vec<i64> = case.graph.nodes().map(|n| n.position.x as i64).collect();
+        xs.sort_unstable();
+        xs.dedup();
+        let column = |id| {
+            let x = case.graph.node(id).unwrap().position.x as i64;
+            xs.iter().position(|v| *v == x).unwrap() as i64
+        };
+
+        for node in case.graph.nodes() {
+            let (before, after) = (
+                case.graph.predecessors(node.id),
+                case.graph.successors(node.id),
+            );
+            // Weight is wires, not neighbours: two wires to one node pull twice.
+            let weigh = |out: bool| {
+                case.graph
+                    .connections()
+                    .filter(|c| if out { c.from.node } else { c.to.node } == node.id)
+                    .count()
+            };
+            let (pull_back, pull_on) = (weigh(false), weigh(true));
+            let want = match pull_back.cmp(&pull_on) {
+                Ordering::Greater => before.iter().map(|&p| column(p) + 1).max(),
+                Ordering::Less => after.iter().map(|&s| column(s) - 1).min(),
+                Ordering::Equal => None,
+            };
+            let Some(want) = want else {
+                continue;
+            };
+            checked += 1;
+            let at = column(node.id);
+            if at != want {
+                failures.push(format!(
+                    "seed {seed}: {:?} sits in column {at} where {want} costs less wire \
+                     ({pull_back} in, {pull_on} out)",
+                    node.id
+                ));
+            }
+        }
+    }
+
+    assert!(checked > 100, "only {checked} nodes had a say; this proves nothing");
+    assert!(
+        failures.is_empty(),
+        "{} of {checked} nodes are in a column that wastes wire:\n{}",
+        failures.len(),
+        report(&failures)
+    );
+}
+

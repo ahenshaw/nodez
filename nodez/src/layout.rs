@@ -158,82 +158,330 @@ pub fn layered<N: NodeData>(
 /// Dependency depth says only how early a node *may* be, and taking it at its
 /// word puts every source in the first column — an image node a whole graph
 /// away from the one service that uses it, with a wire the width of the
-/// canvas to show for it. So depth is only the starting point: each node then
-/// slides to the middle of everything it is wired to, as far as its own
-/// neighbours allow it to go, until a pass changes nothing.
+/// canvas to show for it.
 ///
-/// What comes out still respects dependency — a node is never level with or
-/// left of what feeds it — because the range it may slide within is exactly
-/// what its neighbours leave it.
+/// So depth is only the starting point. What comes out of here is the
+/// assignment that makes the wires as short as they can be in total, counting
+/// each wire once per link and each span in columns — which is the layer
+/// assignment problem, and is solved exactly by [`Network::simplex`] rather
+/// than approached by sliding nodes about. Dependency is respected throughout:
+/// the constraint the whole thing is solved under is that every wire spans at
+/// least one column, in the direction it flows.
 fn columns_of<N: NodeData>(graph: &Graph<N>) -> Result<HashMap<NodeId, usize>, CycleError> {
+    // Also the cycle check callers have always got back, and the feasible
+    // starting point the solver needs: dependency depth satisfies every
+    // constraint, it just satisfies them wastefully.
     let mut at = graph.depths()?;
     if at.is_empty() {
         return Ok(at);
     }
-    let order = graph.topological_order()?;
-    let deepest = at.values().copied().max().unwrap_or(0);
 
-    // A node only moves as far as its neighbours have moved already, so a run
-    // of them shuffles along one pass at a time and the passes alternate
-    // direction to let a run move either way. The loop stops as soon as a
-    // pass changes nothing, which on the graphs this was built for is well
-    // before the cap.
-    const ROUNDS: usize = 8;
-    for round in 0..ROUNDS {
-        let mut moved = false;
-        let sweep: Vec<NodeId> = if round % 2 == 0 {
-            order.iter().rev().copied().collect()
-        } else {
-            order.clone()
-        };
-        for id in sweep {
-            let (before, after) = (graph.predecessors(id), graph.successors(id));
-            // As far left and as far right as it may go without drawing level
-            // with anything it is wired to.
-            let lo = before
-                .iter()
-                .filter_map(|p| at.get(p))
-                .map(|c| c + 1)
-                .max()
-                .unwrap_or(0);
-            let hi = after
-                .iter()
-                .filter_map(|s| at.get(s))
-                .map(|c| c.saturating_sub(1))
-                .min()
-                .unwrap_or(deepest);
-            if lo > hi {
-                continue;
-            }
-            // The middle of what it is wired to, rather than the average: one
-            // far-off neighbour should not drag a node away from the handful
-            // it sits among.
-            let mut want: Vec<usize> = before
-                .iter()
-                .chain(&after)
-                .filter_map(|n| at.get(n).copied())
-                .collect();
-            if want.is_empty() {
-                continue;
-            }
-            want.sort_unstable();
-            let middle = want[want.len() / 2].clamp(lo, hi);
-            if at.insert(id, middle) != Some(middle) {
-                moved = true;
-            }
-        }
-        if !moved {
-            break;
-        }
+    // One component at a time. Nothing wired to nothing has no say in where
+    // anything else goes, and the solver wants a connected graph to build a
+    // spanning tree out of.
+    for part in graph.components() {
+        Network::of(graph, &part, &at).simplex(&mut at);
     }
 
-    // Sliding can empty a column, and an empty column is a blank stripe down
-    // the middle of the picture.
+    // The solver leaves each component starting at its own column zero, and
+    // an unused column in between is a blank stripe down the picture.
     let mut used: Vec<usize> = at.values().copied().collect();
     used.sort_unstable();
     used.dedup();
     let packed: HashMap<usize, usize> = used.iter().enumerate().map(|(i, &c)| (c, i)).collect();
     Ok(at.into_iter().map(|(id, c)| (id, packed[&c])).collect())
+}
+
+/// One link of the layering problem: a wire that must span at least one
+/// column, and what shortening it is worth.
+#[derive(Clone, Copy)]
+struct Link {
+    tail: usize,
+    head: usize,
+    /// How many wires run this way between the same two nodes. Two wires
+    /// between one pair are worth twice as much to shorten as one.
+    weight: i32,
+    /// Whether it is in the spanning tree the solver carries around.
+    tree: bool,
+}
+
+/// The layer assignment problem for one connected component, and the network
+/// simplex that solves it.
+///
+/// Solving it means minimising the total length of the wires — every link
+/// weighed by how many wires it stands for, and measured in columns spanned —
+/// subject to every link spanning at least one column. That is a linear
+/// program whose constraint matrix is a network, so its dual has a spanning
+/// tree for a basis and the simplex method walks from tree to tree: find a
+/// tree edge whose removal would let the ranks improve, swap in the edge that
+/// takes up the slack, repeat until none is left.
+///
+/// This is the layer assignment from Gansner, Koutsofios, North and Vo, *A
+/// Technique for Drawing Directed Graphs* (1993), which is what `dot` uses.
+/// What it buys over sliding each node to the middle of its neighbours is
+/// everything a local rule cannot see: a run of nodes that only pays off when
+/// the whole run moves together, which is exactly how a chain ends up
+/// stretched so that each wire in it stays short.
+struct Network {
+    /// Component-local index to node.
+    nodes: Vec<NodeId>,
+    links: Vec<Link>,
+    /// Link indices touching each node, whichever way round.
+    touching: Vec<Vec<usize>>,
+    rank: Vec<i32>,
+}
+
+impl Network {
+    fn of<N: NodeData>(graph: &Graph<N>, part: &[NodeId], at: &HashMap<NodeId, usize>) -> Self {
+        let index: HashMap<NodeId, usize> = part
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (*id, i))
+            .collect();
+
+        // Parallel wires collapse into one link carrying their weight: they
+        // span the same columns, and the solver has less to look at.
+        let mut weights: HashMap<(usize, usize), i32> = HashMap::new();
+        for connection in graph.connections() {
+            let (Some(&tail), Some(&head)) = (
+                index.get(&connection.from.node),
+                index.get(&connection.to.node),
+            ) else {
+                continue;
+            };
+            if tail != head {
+                *weights.entry((tail, head)).or_default() += 1;
+            }
+        }
+        // Sorted, so the same graph is solved the same way twice.
+        let mut pairs: Vec<((usize, usize), i32)> = weights.into_iter().collect();
+        pairs.sort_unstable();
+
+        let links: Vec<Link> = pairs
+            .into_iter()
+            .map(|((tail, head), weight)| Link {
+                tail,
+                head,
+                weight,
+                tree: false,
+            })
+            .collect();
+
+        let mut touching = vec![Vec::new(); part.len()];
+        for (i, link) in links.iter().enumerate() {
+            touching[link.tail].push(i);
+            touching[link.head].push(i);
+        }
+
+        let rank = part.iter().map(|id| at[id] as i32).collect();
+        Self {
+            nodes: part.to_vec(),
+            links,
+            touching,
+            rank,
+        }
+    }
+
+    /// How many columns of give a link has beyond the one it must span.
+    fn slack(&self, link: &Link) -> i32 {
+        self.rank[link.head] - self.rank[link.tail] - 1
+    }
+
+    /// Solve, and write the answer back.
+    fn simplex(mut self, at: &mut HashMap<NodeId, usize>) {
+        self.feasible_tree();
+
+        // Network simplex terminates on its own, but only an implementation
+        // careful about ties can promise it. A cap is cheaper than that care
+        // and costs nothing when it is not reached: what it gives up is the
+        // last of the optimum on a graph pathological enough to reach it, and
+        // every ranking the loop passes through is feasible.
+        let rounds = 8 * self.nodes.len().max(4);
+        for _ in 0..rounds {
+            let mut cuts = self.cut_values();
+            let Some(leaving) = (0..self.links.len())
+                .find(|&i| self.links[i].tree && cuts[i] < 0)
+            else {
+                break;
+            };
+            let Some((entering, delta, tail_side)) = self.entering(leaving) else {
+                break;
+            };
+            // Shifting one side of the cut by the entering link's slack makes
+            // it tight. It is the least slack of any link crossing back, so
+            // nothing else crossing back is pulled past its own constraint.
+            for (i, side) in tail_side.iter().enumerate() {
+                if *side {
+                    self.rank[i] -= delta;
+                }
+            }
+            self.links[leaving].tree = false;
+            self.links[entering].tree = true;
+            cuts.clear();
+        }
+
+        let floor = self.rank.iter().copied().min().unwrap_or(0);
+        for (i, id) in self.nodes.iter().enumerate() {
+            at.insert(*id, (self.rank[i] - floor) as usize);
+        }
+    }
+
+    /// Shift the ranks until a spanning tree of tight links exists, and keep
+    /// that tree.
+    ///
+    /// A tight link is one with no slack, and only those can be in the tree:
+    /// the tree is what pins the ranks to each other, so an edge with give in
+    /// it would pin nothing.
+    fn feasible_tree(&mut self) {
+        loop {
+            let (reached, tree_links) = self.tight_tree();
+            if tree_links.len() + 1 >= self.nodes.len() {
+                for i in tree_links {
+                    self.links[i].tree = true;
+                }
+                return;
+            }
+
+            // The cheapest link to pull in: least slack of all those with one
+            // end in the tree and one end out of it.
+            let mut best: Option<(i32, usize)> = None;
+            for (i, link) in self.links.iter().enumerate() {
+                let (inside, outside) = (reached[link.tail], reached[link.head]);
+                if inside == outside {
+                    continue;
+                }
+                let slack = self.slack(link);
+                if best.is_none_or(|(least, _)| slack < least) {
+                    best = Some((slack, i));
+                }
+            }
+            let Some((slack, i)) = best else {
+                // Nothing joins the tree to the rest, which cannot happen in
+                // one component. Take what there is rather than spin.
+                for i in tree_links {
+                    self.links[i].tree = true;
+                }
+                return;
+            };
+            // Towards the tree if the tree holds the head, away if it holds
+            // the tail: either way the link comes out tight.
+            let delta = if reached[self.links[i].head] {
+                -slack
+            } else {
+                slack
+            };
+            for (node, reached) in reached.iter().enumerate() {
+                if *reached {
+                    self.rank[node] += delta;
+                }
+            }
+        }
+    }
+
+    /// The largest tree of tight links reachable from the first node, as the
+    /// nodes it covers and the links it is made of.
+    fn tight_tree(&self) -> (Vec<bool>, Vec<usize>) {
+        let mut reached = vec![false; self.nodes.len()];
+        let mut links = Vec::new();
+        if self.nodes.is_empty() {
+            return (reached, links);
+        }
+        reached[0] = true;
+        let mut frontier = vec![0usize];
+        while let Some(node) = frontier.pop() {
+            for &i in &self.touching[node] {
+                let link = &self.links[i];
+                let other = if link.tail == node {
+                    link.head
+                } else {
+                    link.tail
+                };
+                if reached[other] || self.slack(link) != 0 {
+                    continue;
+                }
+                reached[other] = true;
+                links.push(i);
+                frontier.push(other);
+            }
+        }
+        (reached, links)
+    }
+
+    /// Which side of the cut each node falls on when one tree link is taken
+    /// out: true for the side its tail is on.
+    fn split(&self, without: usize) -> Vec<bool> {
+        let mut side = vec![false; self.nodes.len()];
+        side[self.links[without].tail] = true;
+        let mut frontier = vec![self.links[without].tail];
+        while let Some(node) = frontier.pop() {
+            for &i in &self.touching[node] {
+                if i == without || !self.links[i].tree {
+                    continue;
+                }
+                let link = &self.links[i];
+                let other = if link.tail == node {
+                    link.head
+                } else {
+                    link.tail
+                };
+                if !side[other] {
+                    side[other] = true;
+                    frontier.push(other);
+                }
+            }
+        }
+        side
+    }
+
+    /// What each tree link is worth: the weight crossing its cut the way it
+    /// points, less the weight crossing back.
+    ///
+    /// A negative one is a link holding the ranks apart for less than it
+    /// would save to let them close, which is what the simplex goes looking
+    /// for. Worked out from scratch per link rather than carried along and
+    /// patched: it is a walk of the tree per tree link, on graphs of a size
+    /// somebody is looking at.
+    fn cut_values(&self) -> Vec<i32> {
+        self.links
+            .iter()
+            .enumerate()
+            .map(|(i, link)| {
+                if !link.tree {
+                    return 0;
+                }
+                let side = self.split(i);
+                self.links
+                    .iter()
+                    .map(|link| match (side[link.tail], side[link.head]) {
+                        (true, false) => link.weight,
+                        (false, true) => -link.weight,
+                        _ => 0,
+                    })
+                    .sum()
+            })
+            .collect()
+    }
+
+    /// The link that replaces a leaving one: of those crossing its cut the
+    /// other way, the one with the least slack.
+    ///
+    /// Least, because the ranks are about to be shifted by that slack. Any
+    /// link crossing back with less would be shifted past the one column it
+    /// is required to span, and the ranking would stop being a ranking.
+    fn entering(&self, leaving: usize) -> Option<(usize, i32, Vec<bool>)> {
+        let side = self.split(leaving);
+        let mut best: Option<(i32, usize)> = None;
+        for (i, link) in self.links.iter().enumerate() {
+            if link.tree || side[link.tail] || !side[link.head] {
+                continue;
+            }
+            let slack = self.slack(link);
+            if best.is_none_or(|(least, _)| slack < least) {
+                best = Some((slack, i));
+            }
+        }
+        best.map(|(slack, i)| (i, slack, side))
+    }
 }
 
 /// Slide each column's nodes to the height of what they are wired to.
@@ -911,18 +1159,24 @@ fn search(
         .iter()
         .filter(|rect| rect.right() >= near_lo && rect.left() <= near_hi)
         .collect();
-    let (mut loose_x, mut loose_y) = (vec![a.x + pad, b.x - pad], Vec::new());
+    // The lines a node's clearance asks for, kept apart from the ones that
+    // are only convenient, because when two fall together only one survives
+    // and it had better be the one there is a reason for.
+    let (mut clear_x, mut clear_y) = (Vec::new(), Vec::new());
     for rect in &near {
-        loose_x.extend([rect.left() - pad, rect.right() + pad]);
-        loose_y.extend([rect.top() - pad, rect.bottom() + pad]);
+        clear_x.extend([rect.left() - pad, rect.right() + pad]);
+        clear_y.extend([rect.top() - pad, rect.bottom() + pad]);
     }
+    // Where the wire sets off and where it comes in. Useful, but a wire can
+    // set off along any line to its right.
+    let mut loose_x = vec![a.x + pad, b.x - pad];
     // And down the middle of every clear gap between the nodes. A wire has to
     // change height somewhere, and the open middle of a gap is the civil place
     // to do it: hard against a node's side it crowds that node's sockets, and
     // the node has nothing to do with the wire.
     loose_x.extend(gap_centers(&near));
-    let xs = tidy(&[a.x, b.x], &loose_x);
-    let ys = tidy(&[a.y, b.y], &loose_y);
+    let xs = tidy(&[a.x, b.x], &[&clear_x, &loose_x]);
+    let ys = tidy(&[a.y, b.y], &[&clear_y]);
 
     // How hemmed in each line is, so the search can prefer a roomy one. Every
     // way across costs the same length, so without this the choice of line is
@@ -1144,14 +1398,17 @@ fn neighbours(
 ///
 /// The sockets' own lines are kept exactly as given and everything else gives
 /// way to them: a socket is where it is, and a line a fraction of a pixel off
-/// one would have the wire arrive a fraction of a pixel off its socket.
+/// one would have the wire arrive a fraction of a pixel off its socket. After
+/// those, `groups` are taken in turn and a line gives way to anything already
+/// kept, so the earlier a group is the more it matters.
 ///
 /// Only lines the wire could not be drawn between are folded, though, and a
-/// pixel is wider than that. Two nodes whose bottom edges are a pixel apart
-/// give two lanes below them, one of which clears both and one of which
-/// clears neither; folding the clear one into a socket's line a fraction away
-/// loses the only way past, and the wire goes the long way round instead.
-fn tidy(sockets: &[f32], loose: &[f32]) -> Vec<f32> {
+/// pixel is wider than that. Two nodes whose edges are a pixel apart give two
+/// lanes past them, one of which clears both and one of which clears neither;
+/// folding the clear one into a line a fraction away loses the only way past,
+/// and the wire goes the long way round — or, where that was the only way at
+/// all, through the node.
+fn tidy(sockets: &[f32], groups: &[&[f32]]) -> Vec<f32> {
     // Wide enough that a step between two lines survives [`simplify`]. A step
     // dropped as a doubled point takes its end with it, and the step that
     // followed it is left setting off from where the wire has not got to —
@@ -1160,14 +1417,17 @@ fn tidy(sockets: &[f32], loose: &[f32]) -> Vec<f32> {
     let mut out = sockets.to_vec();
     out.sort_by(f32::total_cmp);
     out.dedup_by(|a, b| (*a - *b).abs() < f32::EPSILON);
-    // Sorted before they are sifted: which of two close lines survives would
-    // otherwise depend on which the nodes happened to be visited in, and the
-    // same graph would route differently from one run to the next.
-    let mut loose = loose.to_vec();
-    loose.sort_by(f32::total_cmp);
-    for &line in &loose {
-        if out.iter().all(|kept| (kept - line).abs() >= APART) {
-            out.push(line);
+    // Sorted within each group before they are sifted: which of two close
+    // lines survives would otherwise depend on which the nodes happened to be
+    // visited in, and the same graph would route differently from one run to
+    // the next.
+    for group in groups {
+        let mut group = group.to_vec();
+        group.sort_by(f32::total_cmp);
+        for line in group {
+            if out.iter().all(|kept| (kept - line).abs() >= APART) {
+                out.push(line);
+            }
         }
     }
     out.sort_by(f32::total_cmp);
