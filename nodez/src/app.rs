@@ -103,6 +103,8 @@ pub struct EditorApp<N: NodeData = DynNode> {
     route_wires: bool,
     /// Frame the graph once the editor's rect is known.
     frame_next: bool,
+    /// Route a graph that arrived whole, before it is first drawn.
+    route_next: bool,
     /// A template the palette asked to add, applied after the panel closes.
     pending_add: Option<TemplateId>,
     preview_extension: String,
@@ -123,6 +125,7 @@ impl<N: NodeData> EditorApp<N> {
             show_inspector: true,
             route_wires: true,
             frame_next: true,
+            route_next: true,
             pending_add: None,
             preview_extension: "out".to_owned(),
         }
@@ -257,6 +260,13 @@ impl<N: NodeData + 'static> eframe::App for EditorApp<N> {
 impl<N: NodeData> EditorApp<N> {
     /// Draw the whole thing inside a `Ui`.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
+        // A graph that arrives whole -- the one the app was built with, or one
+        // just loaded -- has never been past the router. Route it before it is
+        // drawn, rather than leaving it straight until the first edit.
+        if self.route_next {
+            self.route_next = false;
+            self.apply_routing();
+        }
         self.top_bar(ui);
         self.status_bar(ui);
         self.side_panel(ui);
@@ -694,6 +704,7 @@ impl<N: NodeData> EditorApp<N> {
                 self.editor.state.clear_selection();
                 self.regenerate();
                 self.frame_next = true;
+                self.route_next = true;
                 if repairs.is_clean() {
                     self.status.info(format!("Loaded {}", self.path));
                 } else {
