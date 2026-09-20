@@ -297,6 +297,19 @@ pub struct Graph<N = DynNode> {
     order: Vec<NodeId>,
     next_node: u64,
     next_connection: u64,
+    /// What each [`TemplateId`] in use here is called, filled in by
+    /// [`Graph::name_templates`] on the way out to a file.
+    ///
+    /// A `TemplateId` is a position in a library, and a position only means
+    /// anything to the library that handed it out. Saved without these, a
+    /// graph is only readable by a library whose templates are registered in
+    /// exactly the same order — which rules out a library that can gain a
+    /// template, and so rules out reusable node groups.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "BTreeMap::is_empty")
+    )]
+    templates: BTreeMap<u32, String>,
 }
 
 impl<N> Default for Graph<N> {
@@ -307,6 +320,7 @@ impl<N> Default for Graph<N> {
             order: Vec::new(),
             next_node: 0,
             next_connection: 0,
+            templates: BTreeMap::new(),
         }
     }
 }
@@ -718,8 +732,42 @@ impl<N: NodeData> Graph<N> {
     /// template defaults.
     ///
     /// Call this after loading a saved graph against an edited library.
+    /// Record what every template in use here is called, so the graph can be
+    /// read back by a library that has since gained or lost templates.
+    ///
+    /// Call it before serializing; [`Graph::validate`] is what reads the
+    /// names again, and clears them once it has. `EditorApp`'s JSON files do
+    /// both for you.
+    pub fn name_templates(&mut self, library: &NodeLibrary) {
+        self.templates = self
+            .nodes
+            .values()
+            .filter_map(|node| {
+                let template = library.get(node.template)?;
+                Some((node.template.0, template.id.clone()))
+            })
+            .collect();
+    }
+
     pub fn validate(&mut self, library: &NodeLibrary) -> Repairs {
         let mut repairs = Repairs::default();
+
+        // First, what the ids in this graph were called when it was written.
+        // A file from a library with different templates, or the same ones in
+        // a different order, is readable exactly as far as the names match.
+        if !self.templates.is_empty() {
+            let named = std::mem::take(&mut self.templates);
+            for node in self.nodes.values_mut() {
+                let Some(name) = named.get(&node.template.0) else {
+                    continue;
+                };
+                // Left alone when the name is gone: the stale sweep below is
+                // what removes it, and it already knows how to say so.
+                if let Some(now) = library.id(name) {
+                    node.template = now;
+                }
+            }
+        }
 
         let stale: Vec<_> = self
             .nodes
@@ -885,6 +933,7 @@ impl<N: NodeData> Graph<N> {
         self.nodes.clear();
         self.connections.clear();
         self.order.clear();
+        self.templates.clear();
     }
 
     /// Whether `target` is reachable from `start` by following outputs.

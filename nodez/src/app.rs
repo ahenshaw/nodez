@@ -715,6 +715,12 @@ impl<N: NodeData> EditorApp<N> {
     }
 
     fn save(&mut self) {
+        if self.persistence.is_none() {
+            return;
+        }
+        // Names for the template ids on the way out, so the file can be read
+        // back by a library with a different set of templates in it.
+        self.graph.name_templates(&self.library);
         let Some(persistence) = &self.persistence else {
             return;
         };

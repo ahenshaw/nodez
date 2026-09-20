@@ -8,6 +8,16 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- `Graph::name_templates`, which records what every template in a graph is
+  called before it is written out, and `Graph::validate` reads the names back
+  and resolves them against whatever library is loading the file. A
+  `TemplateId` is a position in a library and a position means nothing to a
+  library whose templates are registered in another order — a file saved
+  today is silently misread, or a node quietly dropped, by a library that has
+  gained anything ahead of it. `EditorApp`'s save does this for you.
+
 ### Changed
 
 - Whether a wire is routed at all is settled at the clearance it was asked to

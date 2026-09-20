@@ -871,3 +871,50 @@ fn order_survives_a_save_and_load() {
         .collect();
     assert_eq!(order, vec![sources[2], sources[0], sources[1]]);
 }
+
+/// A saved graph survives its library gaining a template.
+///
+/// A `TemplateId` is a position in a library, and a position means nothing to
+/// a library that has since registered something else first. Which is not a
+/// hypothetical: it is what installing a reusable node group does.
+#[cfg(feature = "serde")]
+#[test]
+fn a_graph_reads_back_against_a_reordered_library() {
+    let f = fixture();
+    let mut graph = Graph::new();
+    let a = graph.add_node(&f.library, f.text, pos2(0.0, 0.0));
+    let b = graph.add_node(&f.library, f.sink, pos2(300.0, 0.0));
+    graph.node_mut(a).unwrap().set_input_value("value", "kept");
+    graph.connect(&f.library, (a, "out"), (b, "value")).unwrap();
+
+    graph.name_templates(&f.library);
+    let json = serde_json::to_string(&graph).unwrap();
+
+    // The same templates, registered in another order — a library that has
+    // gained something ahead of them.
+    let mut library = NodeLibrary::new();
+    let text_ty = library.types.add("Text", Color32::from_rgb(0xA1, 0xA1, 0xA1));
+    library.register(NodeTemplate::new("newcomer", "Newcomer").output(SocketSpec::new("out", text_ty)));
+    library.register(
+        NodeTemplate::new("sink", "Output").input(SocketSpec::new("value", text_ty)),
+    );
+    library.register(
+        NodeTemplate::new("text", "Text")
+            .input(SocketSpec::new("value", text_ty).editable(Widget::text()))
+            .output(SocketSpec::new("out", text_ty)),
+    );
+
+    let mut restored: Graph = serde_json::from_str(&json).unwrap();
+    let repairs = restored.validate(&library);
+    assert!(repairs.is_clean(), "{repairs:?}");
+    assert_eq!(restored.node_count(), 2);
+    assert_eq!(restored.connection_count(), 1);
+
+    let moved = |id| library.expect(restored.node(id).unwrap().template).id.clone();
+    assert_eq!(moved(a), "text");
+    assert_eq!(moved(b), "sink");
+    assert_eq!(
+        restored.node(a).unwrap().input_value("value").as_deref(),
+        Some(&Value::Text("kept".to_owned()))
+    );
+}
