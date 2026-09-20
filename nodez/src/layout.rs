@@ -681,7 +681,11 @@ pub fn route_links<N: NodeData>(
                 let mut heights = vec![height(r, &lane)];
                 let crossing: Vec<&Rect> = near
                     .iter()
-                    .filter(|rect| rect.right() >= outer.0 && rect.left() <= outer.1)
+                    // Strictly inside the corridor. A node whose edge the wire
+                    // sets off from is beside it, not in its way; counting a
+                    // whole column that way is what sends a wire diving under
+                    // all of it to reach a socket level with where it started.
+                    .filter(|rect| rect.right() > outer.0 && rect.left() < outer.1)
                     .collect();
                 if !crossing.is_empty() {
                     let top = crossing

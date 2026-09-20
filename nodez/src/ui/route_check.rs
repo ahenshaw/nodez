@@ -352,7 +352,10 @@ fn a_wire_climbs_no_further_than_it_must() {
                 if *id == conn.from.node || *id == conn.to.node {
                     continue;
                 }
-                if rect.right() >= lo && rect.left() <= hi {
+                // Strictly inside the span. A node whose edge the wire starts
+                // or finishes on is beside it, not in its way, and counting a
+                // whole column that way lets a wire dive under all of it.
+                if rect.right() > lo && rect.left() < hi {
                     top = top.min(rect.top());
                     bottom = bottom.max(rect.bottom());
                 }
