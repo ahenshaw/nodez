@@ -46,3 +46,11 @@ required-features = ["derive", "app"]
 [[example]]
 name = "readme_check"
 required-features = ["derive", "app"]
+
+[[example]]
+name = "blender_nodes"
+required-features = ["derive", "app"]
+
+[[example]]
+name = "gnuradio"
+required-features = ["derive", "app"]

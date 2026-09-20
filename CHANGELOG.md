@@ -38,6 +38,12 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   is wider than it sounds: where two nodes' edges are a pixel apart, one of
   the two lanes below them clears both and the other clears neither.
 
+- Two examples that generate Python: `blender_nodes` writes the `bpy` script
+  for a shader tree, and `gnuradio` writes the top-block script for a
+  flowgraph. Both walk the graph rather than folding it, which is what a
+  generator wants from a graph that describes something rather than computes
+  something, and both take `--print` to run without a display.
+
 ### Internal
 
 - The demo's stack graph is a routing fixture, in two arrangements: the one

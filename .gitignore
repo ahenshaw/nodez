@@ -1,3 +1,7 @@
 /target
 /stack-graph.json
 /stack-graph.yaml
+/shader-graph.json
+/shader-graph.py
+/flowgraph.json
+/flowgraph.py

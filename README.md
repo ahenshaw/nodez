@@ -410,6 +410,33 @@ cargo run -- --print       # generate the sample config headlessly
 [`nodes.rs`](nodez-demo/src/nodes.rs) is the whole domain — wire types, node
 kinds, and what each one emits.
 
+## Two more examples
+
+Both generate Python, and both are one file each.
+
+```
+cargo run -p nodez --features derive,app --example blender_nodes
+cargo run -p nodez --features derive,app --example gnuradio
+```
+
+[`blender_nodes`](nodez/examples/blender_nodes.rs) is a slice of Blender's
+shader nodes — noise, ramps, a Principled BSDF — and writes the `bpy` script
+that rebuilds the tree, the way Blender's Node-to-Python addons do. Node
+positions go out with it, so the arrangement made here is the one Blender
+opens with.
+
+[`gnuradio`](nodez/examples/gnuradio.rs) is a slice of GNU Radio's blocks and
+writes the top-block script GNU Radio Companion would. Its Variable block has
+an ordinary number output and every block that needs a sample rate has an
+ordinary number input, so wiring one to the other is all it takes for the
+script to say `samp_rate` instead of `320000.0` — which is what a GRC variable
+is, and the graph already knows it.
+
+Both add `--print` to generate without opening a window, and both differ from
+the quickstart in the same way: they walk the graph instead of folding it.
+A shader tree and a flowgraph *are* the artifact, so what a generator wants
+from them is every node and every link, not what they add up to.
+
 ## Crates
 
 | | |
