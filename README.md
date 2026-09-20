@@ -452,12 +452,16 @@ that rebuilds the tree, the way Blender's Node-to-Python addons do. Node
 positions go out with it, so the arrangement made here is the one Blender
 opens with.
 
+![The Blender example: a procedural material, and the bpy script that rebuilds it](https://raw.githubusercontent.com/ahenshaw/nodez/main/docs/blender_nodes.png)
+
 [`gnuradio`](nodez/examples/gnuradio.rs) is a slice of GNU Radio's blocks and
 writes the top-block script GNU Radio Companion would. Its Variable block has
 an ordinary number output and every block that needs a sample rate has an
 ordinary number input, so wiring one to the other is all it takes for the
 script to say `samp_rate` instead of `320000.0` — which is what a GRC variable
 is, and the graph already knows it.
+
+![The GNU Radio example: a flowgraph, and the top-block script it generates](https://raw.githubusercontent.com/ahenshaw/nodez/main/docs/gnuradio.png)
 
 Both add `--print` to generate without opening a window, and both differ from
 the quickstart in the same way: they walk the graph instead of folding it.
