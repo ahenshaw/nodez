@@ -24,6 +24,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   it, and once more against the finished picture. The first pass cannot judge
   a detour, because the wires it is dodging into have not been placed yet.
 
+### Internal
+
+- The demo's stack graph is a routing fixture, in two arrangements: the one
+  `layered` builds it with, and one arranged by hand in a running editor and
+  pinned. The same graph placed two ways is two different problems for a
+  router, and the second is the one that turned the crossing penalty up.
+
 ## [0.4.1] — 2026-09-20
 
 Nothing in the crates changed. All three are things 0.4.0 went out without,

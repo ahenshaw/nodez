@@ -7,10 +7,16 @@
 //! at.
 //!
 //! It earns its place by what it holds that a random graph rarely does: two
-//! small nodes near the top left feeding the very last node on the right, past
-//! three tall services and the whole bundle of wires between them. Drawn as
-//! plain curves those two are long diagonals across everything, which is
-//! exactly the case the crossing penalty exists for.
+//! small nodes at one end feeding the very last node at the other, past three
+//! tall services and the whole bundle of wires between them. Drawn as plain
+//! curves those two are long diagonals across everything, which is exactly
+//! the case the crossing penalty exists for.
+//!
+//! It comes in two arrangements, because the same graph placed two ways is
+//! two different problems for a router and the second is the one that turned
+//! the crossing penalty up: [`Arrangement::Fresh`] is what the demo builds on
+//! first run, and [`Arrangement::Spread`] is what the editor's Auto layout
+//! button leaves, saved out of a running app and pinned here.
 //!
 //! The demo's own node types live in `nodez-demo` and are not visible from
 //! here, so the templates below mirror them: same sockets, same params, same
@@ -280,8 +286,24 @@ fn library() -> NodeLibrary {
     library
 }
 
-/// The demo's sample stack, wired and laid out the way the app has it.
-fn stack() -> (NodeLibrary, Graph) {
+/// Where the nodes sit.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Arrangement {
+    /// Placed by [`layered`] with the spacing the demo builds the graph with.
+    Fresh,
+    /// Placed by the editor's own Auto layout, which spaces columns wider and
+    /// so leaves longer wires between them.
+    ///
+    /// Read out of a graph saved from a running app rather than worked out
+    /// here, because what it is worth testing against is an arrangement
+    /// somebody was actually looking at. Only the positions are pinned: the
+    /// nodes, their values and their wiring are the same graph either way,
+    /// which is checked against the saved file when these were taken.
+    Spread,
+}
+
+/// The demo's sample stack, wired and placed.
+fn stack(arrangement: Arrangement) -> (NodeLibrary, Graph) {
     let library = library();
     let mut graph = Graph::new();
 
@@ -396,17 +418,48 @@ fn stack() -> (NodeLibrary, Graph) {
     }
 
     let style = EditorStyle::default();
-    layered(
-        &mut graph,
-        &LayoutOptions {
-            column_gap: 70.0,
-            row_gap: 22.0,
-            origin: pos2(0.0, 0.0),
-            sweeps: 6,
-        },
-        |graph, node| node_size(graph, &library, node, &style),
-    )
-    .expect("acyclic");
+    match arrangement {
+        Arrangement::Fresh => {
+            layered(
+                &mut graph,
+                &LayoutOptions {
+                    column_gap: 70.0,
+                    row_gap: 22.0,
+                    origin: pos2(0.0, 0.0),
+                    sweeps: 6,
+                },
+                |graph, node| node_size(graph, &library, node, &style),
+            )
+            .expect("acyclic");
+        }
+        Arrangement::Spread => {
+            for (node, at) in [
+                (frontend, pos2(967.3, 959.9)),
+                (backend, pos2(387.0, 1177.3)),
+                (web_image, pos2(1632.8, 596.2)),
+                (web_port, pos2(1632.8, 715.2)),
+                (web_conf, pos2(1632.8, 856.2)),
+                (web, pos2(1904.4, 725.9)),
+                (api_image, pos2(967.3, 483.9)),
+                (api_port, pos2(967.3, 818.9)),
+                (api_replicas, pos2(968.0, 602.9)),
+                (db_password, pos2(0.4, 655.8)),
+                (dsn_prefix, pos2(0.4, 548.5)),
+                (dsn_suffix, pos2(0.4, 756.4)),
+                (dsn, pos2(387.0, 505.3)),
+                (api_env, pos2(967.3, 699.9)),
+                (api, pos2(1377.1, 597.4)),
+                (db_image, pos2(387.0, 657.3)),
+                (db_volume, pos2(387.0, 895.3)),
+                (db_env, pos2(387.0, 776.3)),
+                (db_health, pos2(387.0, 1036.3)),
+                (db, pos2(703.7, 616.9)),
+                (stack, pos2(2202.8, 1069.4)),
+            ] {
+                graph.node_mut(node).expect("just added").position = at;
+            }
+        }
+    }
 
     (library, graph)
 }
@@ -419,8 +472,8 @@ struct Picture {
 }
 
 impl Picture {
-    fn new(cross: f32) -> Self {
-        let (library, mut graph) = stack();
+    fn new(arrangement: Arrangement, cross: f32) -> Self {
+        let (library, mut graph) = stack(arrangement);
         let style = EditorStyle::default();
         route_links(
             &mut graph,
@@ -545,7 +598,7 @@ impl Picture {
     }
 }
 
-/// Charging for crossings has to leave this picture with fewer of them.
+/// Charging for crossings has to leave both pictures with fewer of them.
 ///
 /// A comparison rather than a bound: how many crossings a graph this size
 /// needs is not something anybody knows, and a number written down here would
@@ -553,26 +606,58 @@ impl Picture {
 /// router to is that paying for them beats not paying.
 #[test]
 fn paying_for_crossings_untangles_the_sample_stack() {
-    let free = Picture::new(0.0).crossings();
-    let priced = Picture::new(RouteOptions::default().cross).crossings();
-    assert!(
-        priced < free,
-        "the sample stack is drawn with {priced} crossings when they cost \
-         something and {free} when they are free"
-    );
+    for arrangement in [Arrangement::Fresh, Arrangement::Spread] {
+        let free = Picture::new(arrangement, 0.0).crossings();
+        let priced = Picture::new(arrangement, RouteOptions::default().cross).crossings();
+        assert!(
+            priced < free,
+            "laid out {arrangement:?}, the sample stack is drawn with {priced} crossings \
+             when they cost something and {free} when they are free"
+        );
+    }
+}
+
+/// Neither arrangement may have a wire running under a node.
+///
+/// The generated sweeps say this of graphs nobody has looked at; this says it
+/// of two somebody has.
+#[test]
+fn no_wire_in_the_sample_stack_runs_under_a_node() {
+    for arrangement in [Arrangement::Fresh, Arrangement::Spread] {
+        let picture = Picture::new(arrangement, RouteOptions::default().cross);
+        let boxes = picture.node_boxes();
+        for (conn, points) in picture.wires() {
+            for p in &points {
+                for (id, rect) in &boxes {
+                    if *id != conn.from.node && *id != conn.to.node {
+                        assert!(
+                            !rect.contains(*p),
+                            "laid out {arrangement:?}, {:?} runs under {id:?}",
+                            conn.id
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// The wire the whole thing came from: the `frontend` network feeds both the
 /// services in the middle and the stack node at the far right, and the far
-/// one is a long drop across everything between. It has to be routed — left
-/// to its own curve it is the diagonal that started this.
+/// one is a long drop across everything between. Laid out fresh it has to be
+/// routed — left to its own curve it is the diagonal that started this.
+///
+/// Only laid out fresh. Spread out, the same two wires keep their curves,
+/// because going round out there crosses as much as cutting across does and
+/// the router is comparing rather than ruling. Asserting they bend in both
+/// arrangements would be asserting a rule the router deliberately does not
+/// have.
 #[test]
 fn the_long_drop_to_the_stack_node_is_routed() {
-    let picture = Picture::new(RouteOptions::default().cross);
-    let boxes = picture.node_boxes();
+    let picture = Picture::new(Arrangement::Fresh, RouteOptions::default().cross);
 
     let mut checked = 0;
-    for (conn, points) in picture.wires() {
+    for conn in picture.graph.connections() {
         let from = picture.graph.node(conn.from.node).unwrap();
         let to = picture.graph.node(conn.to.node).unwrap();
         let long = picture.library.expect(from.template).id == "network"
@@ -581,22 +666,11 @@ fn the_long_drop_to_the_stack_node_is_routed() {
             continue;
         }
         checked += 1;
-
-        // Nothing it passes may be a node, and the picture as a whole is
-        // covered by the count above; what this pins is that the wire is not
-        // left as a straight shot at all.
         assert!(
             !conn.waypoints.is_empty(),
             "{:?} runs straight from the network to the stack node",
             conn.id
         );
-        for p in &points {
-            for (id, rect) in &boxes {
-                if *id != conn.from.node && *id != conn.to.node {
-                    assert!(!rect.contains(*p), "{:?} runs under {id:?}", conn.id);
-                }
-            }
-        }
     }
     assert_eq!(checked, 2, "both networks feed the stack node");
 }
