@@ -441,6 +441,9 @@ pub struct NodeLibrary {
     by_id: HashMap<String, TemplateId>,
     category_colors: HashMap<String, Color32>,
     category_order: Vec<String>,
+    /// The graph behind each template that is a node group. See
+    /// [`crate::group`].
+    pub(crate) groups: HashMap<TemplateId, crate::graph::Graph>,
 }
 
 impl NodeLibrary {

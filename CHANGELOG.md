@@ -10,6 +10,21 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Reusable node groups: a graph registered in a `NodeLibrary` as a template,
+  the way GNU Radio installs a hier block into its block tree. A group node is
+  an ordinary node whose template happens to be a group, so reuse, the add
+  menu, categories, colors and sizing all come free. See `nodez::group`, and
+  the `Audio Chain` block in the `gnuradio` example.
+  - Its interface is read off the inside rather than declared: the Group Input
+    and Group Output pads in it, ordered down the canvas, each contributing
+    the socket it is named after and taking the type of whatever it is wired
+    to.
+  - `Graph::flatten` puts every group node's interior back, so evaluation,
+    traversal and generators carry on seeing a flat graph and need to know
+    nothing about groups. A group that would contain itself is refused when it
+    is registered.
+- `Graph::absorb`, which copies another graph's nodes and wires into this one
+  and says where each of them landed.
 - `Graph::name_templates`, which records what every template in a graph is
   called before it is written out, and `Graph::validate` reads the names back
   and resolves them against whatever library is loading the file. A

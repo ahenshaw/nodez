@@ -85,6 +85,7 @@
 #[cfg(feature = "app")]
 pub mod app;
 pub mod graph;
+pub mod group;
 pub mod layout;
 pub mod template;
 pub mod traversal;

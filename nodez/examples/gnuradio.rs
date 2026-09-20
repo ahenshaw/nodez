@@ -24,6 +24,13 @@
 //! Connections section has to leave those out — so it asks each link what it
 //! carries rather than assuming.
 //!
+//! It also carries a hier block — GNU Radio's word for a flowgraph installed
+//! into the block tree and used as one block. `Audio Chain` is a group: it
+//! appears in the Flow category beside the blocks that came with the example,
+//! its sockets are read off the pads inside it, and the generator does not
+//! know it exists. One `flatten` puts the interior back and the script comes
+//! out exactly as it did before there was a hier block at all.
+//!
 //! Left out on purpose: the `qtgui` sinks. They are most of what a GRC script
 //! looks like and almost none of what it does, and a generated Qt application
 //! would say more about Qt than about nodez.
@@ -505,6 +512,10 @@ fn python_name(name: &str) -> String {
 }
 
 fn generate(graph: &Graph, library: &NodeLibrary) -> Preview {
+    // A hier block is a flat flowgraph once it runs, so it is one here too.
+    // This is the whole of what the generator has to know about groups: put
+    // the interiors back and carry on as before.
+    let graph = &graph.flatten(library);
     let script = Script::new(graph, library);
     let mut problems = script.problems.clone();
     let order = Script::ordered(graph, &mut Vec::new());
@@ -625,6 +636,17 @@ fn main() -> eframe::Result {
     register::<AudioSink>(&mut library);
     register::<NullSink>(&mut library);
 
+    // A hier block, which is GNU Radio's word for a flowgraph installed into
+    // the block tree and used as one block. Built here so the example stands
+    // alone; in a real setup this is a `.grc` file read off disk, which is
+    // the whole reason a group lives in the library rather than in the
+    // document — one definition, every flowgraph that loads the library.
+    nodez::group::register_pads(&mut library);
+    let inside = audio_chain(&library);
+    library
+        .register_group("audio_chain", "Audio Chain", "Flow", inside)
+        .expect("the hier block is well formed");
+
     let graph = starting_graph(&library);
 
     // `--print` writes the script for the starting graph and exits, so the
@@ -648,6 +670,69 @@ fn main() -> eframe::Result {
         .run()
 }
 
+/// The inside of the Audio Chain hier block: take the sample rate and a
+/// stream, filter it, scale it and resample it for the sound card.
+///
+/// The pads are what become its sockets. Their order down the canvas is the
+/// order the sockets come out in, and their type is whatever they are wired
+/// to in here — so nothing about the interface is written down twice.
+fn audio_chain(library: &NodeLibrary) -> Graph {
+    let mut graph = Graph::new();
+    let add = |graph: &mut Graph, id: &str, y: f32| {
+        let template = library
+            .id(id)
+            .unwrap_or_else(|| panic!("`{id}` is registered"));
+        graph.add_node(library, template, egui::pos2(0.0, y))
+    };
+    use nodez::group::{INPUT_PAD, OUTPUT_PAD, PAD_NAME};
+
+    let stream_in = add(&mut graph, INPUT_PAD, 0.0);
+    let rate_in = add(&mut graph, INPUT_PAD, 120.0);
+    let lowpass = add(&mut graph, "low_pass", 0.0);
+    let gain = add(&mut graph, "multiply_const", 0.0);
+    let resample = add(&mut graph, "resampler", 0.0);
+    let stream_out = add(&mut graph, OUTPUT_PAD, 0.0);
+
+    for (node, name) in [
+        (stream_in, "in"),
+        (rate_in, "Sample Rate"),
+        (stream_out, "out"),
+    ] {
+        graph
+            .node_mut(node)
+            .expect("just added")
+            .set_param(PAD_NAME, Value::from(name));
+    }
+    for (node, socket, value) in [
+        (lowpass, "cutoff", Value::Float(15_000.0)),
+        (lowpass, "transition", Value::Float(4_000.0)),
+        (gain, "constant", Value::Float(0.5)),
+        (resample, "decimation", Value::Int(4)),
+    ] {
+        graph
+            .node_mut(node)
+            .expect("just added")
+            .set_input_value(socket, value);
+    }
+
+    for (from, from_socket, to, to_socket) in [
+        (stream_in, "out", lowpass, "input"),
+        (rate_in, "out", lowpass, "sample_rate"),
+        (lowpass, "out", gain, "input"),
+        (gain, "out", resample, "input"),
+        (resample, "out", stream_out, "in"),
+    ] {
+        graph
+            .connect(library, (from, from_socket), (to, to_socket))
+            .unwrap_or_else(|e| panic!("wiring {to_socket}: {e}"));
+    }
+
+    let _ = nodez::layered(&mut graph, &nodez::LayoutOptions::default(), |graph, node| {
+        nodez::node_size(graph, library, node, &nodez::EditorStyle::default())
+    });
+    graph
+}
+
 /// A tone and some noise, mixed up to a carrier, filtered back down, and sent
 /// to both a file and the sound card.
 fn starting_graph(library: &NodeLibrary) -> Graph {
@@ -667,9 +752,8 @@ fn starting_graph(library: &NodeLibrary) -> Graph {
     let throttle = add_node(&mut graph, "throttle");
     let carrier = add_node(&mut graph, "sig_source");
     let mixer = add_node(&mut graph, "multiply");
-    let lowpass = add_node(&mut graph, "low_pass");
-    let gain = add_node(&mut graph, "multiply_const");
-    let resample = add_node(&mut graph, "resampler");
+    // The hier block, standing in for the filter, the gain and the resampler.
+    let chain = add_node(&mut graph, "audio_chain");
     let to_file = add_node(&mut graph, "file_sink");
     let to_audio = add_node(&mut graph, "audio_sink");
 
@@ -685,10 +769,6 @@ fn starting_graph(library: &NodeLibrary) -> Graph {
         (tone, "amplitude", Value::Float(0.7)),
         (hiss, "amplitude", Value::Float(0.05)),
         (carrier, "frequency", Value::Float(40_000.0)),
-        (lowpass, "cutoff", Value::Float(15_000.0)),
-        (lowpass, "transition", Value::Float(4_000.0)),
-        (gain, "constant", Value::Float(0.5)),
-        (resample, "decimation", Value::Int(4)),
         (to_file, "file", Value::from("mixed.dat")),
     ] {
         graph
@@ -704,15 +784,13 @@ fn starting_graph(library: &NodeLibrary) -> Graph {
         (sum, throttle, "input"),
         (throttle, mixer, "inputs"),
         (carrier, mixer, "inputs"),
-        (mixer, lowpass, "input"),
-        (lowpass, gain, "input"),
-        (gain, resample, "input"),
-        (resample, to_file, "input"),
-        (resample, to_audio, "input"),
+        (mixer, chain, "in"),
+        (chain, to_file, "input"),
+        (chain, to_audio, "input"),
         (samp_rate, tone, "sample_rate"),
         (samp_rate, carrier, "sample_rate"),
         (samp_rate, throttle, "sample_rate"),
-        (samp_rate, lowpass, "sample_rate"),
+        (samp_rate, chain, "Sample Rate"),
         (audio_rate, to_audio, "sample_rate"),
     ] {
         let out = graph

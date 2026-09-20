@@ -407,6 +407,39 @@ is deliberately switched off rather than unfinished, so it is never marked.
 `EditorStyle::show_missing_inputs` turns it off, and the demo's Unfilled box
 flips it live.
 
+## Reusable node groups
+
+A group is a graph used as a node — Blender's node groups, GNU Radio's hier
+blocks. It is a *template*, not a node, so it lives in the library rather than
+in the document: register it once and every graph that loads the library can
+use it, the way a hier block is installed into the block tree.
+
+```rust
+nodez::group::register_pads(&mut library);
+library.register_group("audio_chain", "Audio Chain", "Flow", inside)?;
+```
+
+The interface is read off the inside. A group's inputs are the Group Input
+pads in it and its outputs are the Group Output pads, ordered down the canvas,
+each contributing the socket it is named after — so moving a pad moves the
+socket, and nothing about the interface is written down twice. A pad carries a
+wildcard socket, so the group's outer socket takes the type of whatever the
+pad is wired to.
+
+Nothing downstream has to know any of this:
+
+```rust
+let flat = graph.flatten(&library);   // every group node replaced by its interior
+```
+
+Evaluation, traversal and every generator go on seeing one flat graph — which
+is what a hier block is once it runs and what a node group is once it renders.
+The `gnuradio` example carries one, and its generator needed exactly that one
+line.
+
+A group that would contain itself is refused when it is registered, so nothing
+downstream has to guard against it.
+
 ## Just the widget
 
 `EditorApp` is a window; `NodeEditor` is the canvas alone, for dropping into an

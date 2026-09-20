@@ -855,6 +855,50 @@ impl<N: NodeData> Graph<N> {
     /// Copy a set of nodes, keeping the wires that run between them.
     ///
     /// Returns a map from original id to copy id.
+    /// Copy every node and wire of another graph into this one, offset, and
+    /// say where each of its nodes landed.
+    ///
+    /// Unlike [`Graph::duplicate_subgraph`] the source is a different graph,
+    /// so nothing here needs to be looked up against a library: the wires
+    /// being copied were valid where they came from and connect the same two
+    /// sockets when they arrive.
+    pub fn absorb(&mut self, other: &Graph<N>, offset: egui::Vec2) -> HashMap<NodeId, NodeId>
+    where
+        N: Clone,
+    {
+        let mut mapping = HashMap::new();
+        for id in other.nodes.keys().copied() {
+            let Some(node) = other.nodes.get(&id) else {
+                continue;
+            };
+            let mut copy = node.clone();
+            copy.position += offset;
+            mapping.insert(id, self.insert_node(copy));
+        }
+        for link in other.connections.values() {
+            let (Some(&from), Some(&to)) =
+                (mapping.get(&link.from.node), mapping.get(&link.to.node))
+            else {
+                continue;
+            };
+            self.insert_connection(
+                SocketRef::new(from, link.from.socket.clone()),
+                SocketRef::new(to, link.to.socket.clone()),
+                link.order,
+            );
+        }
+        mapping
+    }
+
+    /// Join two sockets without asking a library whether they may be joined.
+    ///
+    /// For rewiring links that were already valid — putting a group's
+    /// interior back into the graph — where the answer is known and the
+    /// library has nothing to add.
+    pub(crate) fn rejoin(&mut self, from: SocketRef, to: SocketRef, order: u32) -> ConnectionId {
+        self.insert_connection(from, to, order)
+    }
+
     pub fn duplicate_subgraph(
         &mut self,
         nodes: &HashSet<NodeId>,
