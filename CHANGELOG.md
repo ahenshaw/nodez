@@ -8,6 +8,15 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- Whether a wire is routed at all is settled at the clearance it was asked to
+  keep, rather than at the tightest one on offer. A reduced clearance is how a
+  path is *found* when there is no other; it was also, by accident, a reason
+  to prefer a path to the curve — a finer grid would turn up a route a hair
+  cheaper and the wire would come out as a run of right angles on a difference
+  nobody could see. Which of the routes gets drawn is still the cheapest.
+
 ## [0.5.0] — 2026-09-20
 
 Everything in this release came of looking at the same picture and asking why

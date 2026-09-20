@@ -987,12 +987,24 @@ fn plan_link(
     // far more than the gap it bought.
     const CLEARANCES: [f32; 3] = [1.0, 0.5, 0.125];
     let room = |scale: f32| (options.margin * scale).max(2.0);
-    let found = CLEARANCES
+    let routes: Vec<((Vec<Pos2>, f32), f32)> = CLEARANCES
         .into_iter()
         .filter_map(|scale| {
             let pad = room(scale);
             search(a, b, obstacles, others, pad, true, options).map(|route| (route, pad))
         })
+        .collect();
+    // What a route costs when the wire keeps every bit of the room it was
+    // asked for, which is what the curve is judged against. Nothing if there
+    // is no such route, in which case the curve is judged against whatever
+    // there is — a wire with nowhere clean to go still has to go somewhere.
+    let asked = room(CLEARANCES[0]);
+    let roomiest = routes
+        .iter()
+        .find(|(_, pad)| *pad == asked)
+        .map(|((_, cost), _)| *cost);
+    let found = routes
+        .into_iter()
         .min_by(|(one, _), (two, _)| one.1.total_cmp(&two.1))
         // And only then with the rule against turning back lifted — a wire
         // that jogs the wrong way for a moment still beats one drawn through
@@ -1014,7 +1026,16 @@ fn plan_link(
         // where the wire goes.
         None => Plan::straight(link, curve),
         Some(((path, cost), clearance)) => {
-            if plain.is_some_and(|(len, over)| len + over as f32 * options.cross <= cost) {
+            // Whether a wire is routed at all is settled at the clearance it
+            // was asked to keep, not at the tightest one that happens to be
+            // on offer. A reduced clearance is how a path is *found* when
+            // there is no other; it is not a reason to prefer a path to the
+            // curve. Letting it be one means a finer grid turning up a route
+            // a hair cheaper, and a wire coming out as a run of right angles
+            // on a difference nobody could see. Once routing is decided, the
+            // cheapest of them is still the one to draw.
+            let judged = roomiest.unwrap_or(cost);
+            if plain.is_some_and(|(len, over)| len + over as f32 * options.cross <= judged) {
                 return Plan::straight(link, curve);
             }
             // Straightened away, so everything downstream sees whole
