@@ -191,6 +191,11 @@ impl Routed {
             .any(|(i, (_, a))| self.rects[i + 1..].iter().any(|(_, b)| a.intersects(*b)))
     }
 
+    /// A node's box, for asking where a wire may turn.
+    fn box_of(&self, id: NodeId) -> Rect {
+        self.rects.iter().find(|(at, _)| *at == id).unwrap().1
+    }
+
     /// Where a wire attaches at each end.
     fn ends(&self, conn: &crate::graph::Connection) -> (Pos2, Pos2) {
         let from = self.graph.node(conn.from.node).unwrap();
@@ -280,7 +285,11 @@ fn crossing_sweep(jitter: f32, what: &str) {
                         dx.min(dy)
                     })
                     .fold(0.0f32, f32::max);
-                if worst > 0.0 {
+                // `Rect::contains` counts the outline itself, and a sampled
+                // curve lands on it to within float noise, so tangency has to
+                // be told apart from a wire that is genuinely inside.
+                const TANGENT: f32 = 0.1;
+                if worst > TANGENT {
                     deepest = deepest.max(worst);
                     if conn.waypoints.is_empty() {
                         straight += 1;
@@ -314,6 +323,75 @@ fn crossing_sweep(jitter: f32, what: &str) {
         failures.len(),
         report(&failures)
     );
+}
+
+/// A routed wire has to arrive along its own height, from outside the node it
+/// is landing on. Letting the climb sit on the target's edge costs the last
+/// leg its length, and the wire then drops onto the socket down the face of
+/// the node, crossing whatever other sockets it passes on the way — which
+/// reads as if it fed every one of them.
+#[test]
+fn a_wire_meets_its_socket_level() {
+    for (jitter, what) in [(0.0, "in the layout"), (30.0, "once nudged")] {
+        let mut failures: Vec<String> = Vec::new();
+        let mut checked = 0;
+
+        for seed in 1..=CASES {
+            let case = route_with(&mut Rng::new(seed), jitter);
+            for conn in case.graph.connections() {
+                let (Some(first), Some(last)) =
+                    (conn.waypoints.first(), conn.waypoints.last())
+                else {
+                    continue; // Straight to the socket; nothing to arrive along.
+                };
+                checked += 1;
+                let (a, b) = case.ends(conn);
+                let from = case.box_of(conn.from.node);
+                let to = case.box_of(conn.to.node);
+
+                // Level with the socket, so the wire runs into it rather than
+                // down onto it.
+                const LEVEL: f32 = 0.5;
+                if (last.y - b.y).abs() > LEVEL {
+                    failures.push(format!(
+                        "seed {seed}: wire {:?} arrives {:.1}px off its socket's height",
+                        conn.id,
+                        (last.y - b.y).abs()
+                    ));
+                }
+                if (first.y - a.y).abs() > LEVEL {
+                    failures.push(format!(
+                        "seed {seed}: wire {:?} leaves {:.1}px off its socket's height",
+                        conn.id,
+                        (first.y - a.y).abs()
+                    ));
+                }
+                // And from outside the node, not down its face.
+                if last.x > to.left() {
+                    failures.push(format!(
+                        "seed {seed}: wire {:?} turns {:.1}px inside the node it lands on",
+                        conn.id,
+                        last.x - to.left()
+                    ));
+                }
+                if first.x < from.right() {
+                    failures.push(format!(
+                        "seed {seed}: wire {:?} turns {:.1}px inside the node it leaves",
+                        conn.id,
+                        from.right() - first.x
+                    ));
+                }
+            }
+        }
+
+        assert!(checked > 0, "no routed wires {what}; the sweep proves nothing");
+        assert!(
+            failures.is_empty(),
+            "{} of {checked} routed wires meet a socket badly {what}:\n{}",
+            failures.len(),
+            report(&failures)
+        );
+    }
 }
 
 #[test]
