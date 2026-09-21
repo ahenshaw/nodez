@@ -440,6 +440,33 @@ line.
 A group that would contain itself is refused when it is registered, so nothing
 downstream has to guard against it.
 
+Groups are written out as ordinary graph documents wrapped in what a graph
+cannot say about itself — what the group is called and where it belongs in the
+menu:
+
+```json
+{ "id": "audio_chain", "label": "Audio Chain", "category": "Flow",
+  "graph": { "nodes": { ... } } }
+```
+
+The sockets are deliberately *not* in there. They are read off the pads, and
+writing them down as well would only give them somewhere to drift from. The
+`id` is deliberately not the file's name either: saved graphs refer to a
+template by id, so taking it from the filename would mean renaming a file
+quietly unmade every document that used what was in it.
+
+```rust
+EditorApp::new(library).groups_dir("groups")   // read at startup, written by Ctrl+G
+library.load_groups("groups")                  // or do it yourself
+```
+
+Reading a directory takes more than one pass. A group built from another has
+to be read second and nothing in a file says which, so they are read until a
+pass registers nothing; what is left is missing a template or stands in a
+circle with another file, and is reported rather than half-registered. A group
+short of a template is refused outright rather than read with those nodes
+quietly dropped.
+
 In the editor, `Ctrl+G` makes a group of the selection and leaves one node in
 its place, double-clicking a group node below its header opens what is inside,
 and `Escape` comes back out. A breadcrumb in the toolbar says where you are and

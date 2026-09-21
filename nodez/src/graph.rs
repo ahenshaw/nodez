@@ -749,6 +749,12 @@ impl<N: NodeData> Graph<N> {
             .collect();
     }
 
+    /// The template names this graph was saved against, if it was saved with
+    /// them. See [`Graph::name_templates`].
+    pub fn template_names(&self) -> impl Iterator<Item = &String> {
+        self.templates.values()
+    }
+
     pub fn validate(&mut self, library: &NodeLibrary) -> Repairs {
         let mut repairs = Repairs::default();
 

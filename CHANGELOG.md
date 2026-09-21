@@ -29,6 +29,17 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     instance picks up a socket added inside.
   - `EditorAction` gains `GroupSelection`, `EnterGroup` and `LeaveGroup`. The
     widget has no library to register a group in or look one up, so it asks.
+  - Groups are read and written as files: `NodeLibrary::write_group`,
+    `read_group` and `load_groups`, and `EditorApp::groups_dir`, which reads a
+    directory of them at startup and writes what `Ctrl+G` makes back into it.
+    A group file is an ordinary graph document wrapped in what a graph cannot
+    say about itself — id, label, category — and the sockets stay out of it,
+    because they are read off the pads. The id is not the file's name, so
+    renaming a file cannot unmake the documents that used it. Reading a
+    directory takes repeated passes, since a group built from another has to
+    be read second and nothing in a file says which.
+- `Graph::template_names`, the names a graph recorded for the templates it
+  was saved against.
 - `Graph::convert`, which moves a graph from one node payload to another by
   copying what its templates name. It is what lets an editor on any payload
   open a group, whose interior is always the dynamic one.

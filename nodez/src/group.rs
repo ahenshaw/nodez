@@ -36,7 +36,7 @@ pub const OUTPUT_PAD: &str = "group_output";
 /// The parameter on a pad that names the socket it becomes.
 pub const PAD_NAME: &str = "name";
 
-/// What a group could not be made of.
+/// What a group could not be made of, or read from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GroupError {
     /// A group that contains itself, directly or through another.
@@ -45,6 +45,14 @@ pub enum GroupError {
     DuplicatePad(String),
     /// No pads at all, so the group would have no way in or out.
     NoPads,
+    /// The template asked about is not a group.
+    NotAGroup,
+    /// The file would not parse.
+    Unreadable(String),
+    /// The group is made of templates this library does not have. Which is
+    /// not final: a group read before the group it is made of will say this,
+    /// and reading the other one first answers it.
+    Missing(Vec<String>),
 }
 
 impl std::fmt::Display for GroupError {
@@ -53,11 +61,40 @@ impl std::fmt::Display for GroupError {
             Self::Recursive(id) => write!(f, "group `{id}` would contain itself"),
             Self::DuplicatePad(name) => write!(f, "two pads are both called `{name}`"),
             Self::NoPads => write!(f, "a group needs at least one pad to wire it up by"),
+            Self::NotAGroup => write!(f, "that template is not a group"),
+            Self::Unreadable(why) => write!(f, "{why}"),
+            Self::Missing(names) => {
+                write!(f, "nothing registered under {}", names.join(", "))
+            }
         }
     }
 }
 
 impl std::error::Error for GroupError {}
+
+/// A group as it is written down: what it is called, and the graph it is.
+///
+/// The graph is an ordinary graph document, the same as any file the editor
+/// saves — so a group can be opened and edited like one, and any saved graph
+/// becomes a group by being wrapped in this.
+///
+/// What is *not* in here is the group's sockets. Those are read off the pads
+/// inside, and writing them down as well would only give them somewhere to
+/// drift from.
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct GroupFile {
+    /// What saved graphs call this group. The contract — deliberately not the
+    /// file's name, so that renaming a file cannot quietly unmake every
+    /// document that used what was in it.
+    pub id: String,
+    pub label: String,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub category: String,
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "String::is_empty"))]
+    pub description: String,
+    pub graph: Graph,
+}
 
 /// Register the two pad templates, and hand back their ids.
 ///
@@ -575,6 +612,117 @@ fn spare(taken: &mut HashSet<String>, want: String) -> String {
     name
 }
 
+// ------------------------------------------------------------ reading and
+// writing
+
+/// The templates a graph says it was saved against that this library has
+/// nothing registered under.
+///
+/// Read off the names a graph carries — see [`Graph::name_templates`] — so a
+/// graph saved without them cannot be checked and is taken on trust.
+fn missing(graph: &Graph, library: &NodeLibrary) -> Vec<String> {
+    let mut names: Vec<String> = graph
+        .template_names()
+        .filter(|name| library.id(name).is_none())
+        .cloned()
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+#[cfg(feature = "serde")]
+impl NodeLibrary {
+    /// A group written out, ready to be put in a file.
+    pub fn write_group(&self, template: TemplateId) -> Result<String, GroupError> {
+        let Some(inside) = self.group(template) else {
+            return Err(GroupError::NotAGroup);
+        };
+        let was = self.expect(template);
+        // Names for the ids on the way out, the same as a document gets, so
+        // the group can be read back by a library with other templates in it.
+        let mut graph = inside.clone();
+        graph.name_templates(self);
+        let file = GroupFile {
+            id: was.id.clone(),
+            label: was.label.clone(),
+            category: was.category.clone(),
+            description: was.description.clone(),
+            graph,
+        };
+        serde_json::to_string_pretty(&file).map_err(|e| GroupError::Unreadable(e.to_string()))
+    }
+
+    /// Read a group and register it.
+    ///
+    /// Refused rather than half-done when the group is made of templates this
+    /// library has not got: a group read before the one it is built from
+    /// would otherwise come back with those nodes quietly dropped. See
+    /// [`NodeLibrary::load_groups`], which is what sorts that out.
+    pub fn read_group(&mut self, text: &str) -> Result<TemplateId, GroupError> {
+        let file: GroupFile =
+            serde_json::from_str(text).map_err(|e| GroupError::Unreadable(e.to_string()))?;
+        let short = missing(&file.graph, self);
+        if !short.is_empty() {
+            return Err(GroupError::Missing(short));
+        }
+        let mut graph = file.graph;
+        graph.validate(self);
+        self.register_group(&file.id, &file.label, &file.category, graph)
+    }
+
+    /// Read every group in a directory, in whatever order they need.
+    ///
+    /// Not the order the directory gives them: a group built from another has
+    /// to be read second, and nothing about a file says which. So they are
+    /// read in passes until a pass registers nothing, which settles any
+    /// order that can be settled. What is left over is missing a template or
+    /// stands in a circle with another file, and is returned rather than
+    /// half-registered.
+    pub fn load_groups(&mut self, dir: impl AsRef<std::path::Path>) -> Vec<(String, GroupError)> {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        let mut waiting: Vec<(String, String)> = Vec::new();
+        let mut problems = Vec::new();
+        let mut paths: Vec<std::path::PathBuf> =
+            entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
+        // Sorted, so the same directory loads the same way twice.
+        paths.sort();
+        for path in paths {
+            if path.extension().is_none_or(|e| e != "json") {
+                continue;
+            }
+            let name = path.display().to_string();
+            match std::fs::read_to_string(&path) {
+                Ok(text) => waiting.push((name, text)),
+                Err(e) => problems.push((name, GroupError::Unreadable(e.to_string()))),
+            }
+        }
+
+        while !waiting.is_empty() {
+            let mut left = Vec::new();
+            let mut registered = 0;
+            for (name, text) in waiting {
+                match self.read_group(&text) {
+                    Ok(_) => registered += 1,
+                    Err(GroupError::Missing(short)) => left.push((name, text, short)),
+                    Err(e) => problems.push((name, e)),
+                }
+            }
+            if registered == 0 {
+                problems.extend(
+                    left.into_iter()
+                        .map(|(name, _, short)| (name, GroupError::Missing(short))),
+                );
+                break;
+            }
+            waiting = left.into_iter().map(|(name, text, _)| (name, text)).collect();
+        }
+        problems
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -583,7 +731,7 @@ mod tests {
     use egui::{Color32, pos2};
 
     /// Text in, text out, and a Join in the middle: enough to make a group of.
-    fn library() -> (NodeLibrary, DataTypeId) {
+    fn fixture() -> (NodeLibrary, DataTypeId) {
         let mut library = NodeLibrary::new();
         let text = library.types.add("Text", Color32::from_rgb(0xA1, 0xA1, 0xA1));
         library.register(
@@ -624,7 +772,7 @@ mod tests {
     /// A group's sockets are its pads, in the order they are drawn.
     #[test]
     fn a_groups_interface_is_read_off_its_pads() {
-        let (mut library, text) = library();
+        let (mut library, text) = fixture();
         let body = inside(&library);
         let id = library
             .register_group("pair", "Pair", "Group", body)
@@ -644,7 +792,7 @@ mod tests {
     /// A group node is an ordinary node, and wires to it like one.
     #[test]
     fn a_group_can_be_wired_up_like_any_other_node() {
-        let (mut library, _) = library();
+        let (mut library, _) = fixture();
         let body = inside(&library);
         library.register_group("pair", "Pair", "Group", body).unwrap();
 
@@ -665,7 +813,7 @@ mod tests {
     /// Flattening puts the inside back, and leaves nothing of the group.
     #[test]
     fn flattening_a_group_leaves_a_graph_that_knows_nothing_of_it() {
-        let (mut library, _) = library();
+        let (mut library, _) = fixture();
         let body = inside(&library);
         library.register_group("pair", "Pair", "Group", body).unwrap();
 
@@ -716,7 +864,7 @@ mod tests {
     /// A group inside a group opens all the way down.
     #[test]
     fn a_group_inside_a_group_flattens_too() {
-        let (mut library, _) = library();
+        let (mut library, _) = fixture();
         let body = inside(&library);
         library.register_group("pair", "Pair", "Group", body).unwrap();
 
@@ -761,7 +909,7 @@ mod tests {
     /// and flattening puts it all back.
     #[test]
     fn a_selection_becomes_a_group_and_comes_back_out_of_one() {
-        let (mut library, _) = library();
+        let (mut library, _) = fixture();
         let mut graph = Graph::new();
         let add = |graph: &mut Graph, id: &str| {
             graph.add_node(&library, library.id(id).unwrap(), pos2(0.0, 0.0))
@@ -811,7 +959,7 @@ mod tests {
     /// the group takes one wire where the selection took two.
     #[test]
     fn one_source_feeding_twice_makes_one_input() {
-        let (mut library, _) = library();
+        let (mut library, _) = fixture();
         let mut graph = Graph::new();
         let add = |graph: &mut Graph, id: &str| {
             graph.add_node(&library, library.id(id).unwrap(), pos2(0.0, 0.0))
@@ -844,11 +992,89 @@ mod tests {
         assert!(flat.is_input_linked(join.id, "b"));
     }
 
+    /// A group survives being written out and read back by another library.
+    #[cfg(feature = "serde")]
+    #[test]
+    fn a_group_round_trips_through_a_file() {
+        let (mut library, _) = fixture();
+        let body = inside(&library);
+        let id = library
+            .register_group("pair", "Pair", "Group", body)
+            .unwrap();
+        let text = library.write_group(id).unwrap();
+
+        // A second library with the same templates in another order, which is
+        // the case the names in the file are there for.
+        let (mut other, _) = fixture();
+        other.register(NodeTemplate::new("newcomer", "Newcomer"));
+        let read = other.read_group(&text).unwrap();
+
+        let template = other.expect(read);
+        assert_eq!(template.id, "pair");
+        assert_eq!(template.label, "Pair");
+        let names: Vec<&str> = template.inputs.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["left", "right"]);
+        assert_eq!(template.outputs.len(), 1);
+        assert!(other.is_group(read));
+
+        // And it still flattens to what it was made of.
+        let mut graph = Graph::new();
+        let node = graph.add_node(&other, read, pos2(0.0, 0.0));
+        assert!(graph.flatten(&other).nodes().any(|n| {
+            other.expect(n.template).id == "join"
+        }));
+        let _ = node;
+    }
+
+    /// A group built from another is refused until the other one is there,
+    /// rather than read with those nodes quietly dropped.
+    #[cfg(feature = "serde")]
+    #[test]
+    fn a_group_made_of_a_group_waits_for_it() {
+        let (mut library, _) = fixture();
+        let body = inside(&library);
+        library.register_group("pair", "Pair", "Group", body).unwrap();
+
+        // A group that uses `pair`.
+        let mut outer = Graph::new();
+        let add = |graph: &mut Graph, id: &str, y: f32| {
+            graph.add_node(&library, library.id(id).unwrap(), pos2(0.0, y))
+        };
+        let pad = add(&mut outer, INPUT_PAD, 0.0);
+        let pair = add(&mut outer, "pair", 50.0);
+        let out = add(&mut outer, OUTPUT_PAD, 100.0);
+        outer.node_mut(pad).unwrap().set_param(PAD_NAME, Value::from("one"));
+        outer.node_mut(out).unwrap().set_param(PAD_NAME, Value::from("both"));
+        outer.connect(&library, (pad, "out"), (pair, "left")).unwrap();
+        outer.connect(&library, (pair, "joined"), (out, "in")).unwrap();
+        let nested = library
+            .register_group("nested", "Nested", "Group", outer)
+            .unwrap();
+
+        let inner_text = library.write_group(library.id("pair").unwrap()).unwrap();
+        let outer_text = library.write_group(nested).unwrap();
+
+        // Read the outer one first, into a library that has neither.
+        let (mut fresh, _) = fixture();
+        let refused = fresh.read_group(&outer_text);
+        assert_eq!(refused, Err(GroupError::Missing(vec!["pair".to_owned()])));
+
+        // With the inner one read first it goes in, and still opens all the
+        // way down.
+        fresh.read_group(&inner_text).unwrap();
+        let read = fresh.read_group(&outer_text).unwrap();
+        let mut graph = Graph::new();
+        graph.add_node(&fresh, read, pos2(0.0, 0.0));
+        assert!(graph.flatten(&fresh).nodes().any(|n| {
+            fresh.expect(n.template).id == "join"
+        }));
+    }
+
     /// A group that contains itself is refused rather than left to be found
     /// by whatever tries to open it.
     #[test]
     fn a_group_cannot_contain_itself() {
-        let (mut library, _) = library();
+        let (mut library, _) = fixture();
         let body = inside(&library);
         library.register_group("pair", "Pair", "Group", body).unwrap();
 

@@ -35,6 +35,7 @@ fn main() -> eframe::Result {
         .style(style)
         .title("nodez \u{2014} stack config editor")
         .file("stack-graph.json")
+        .groups_dir("groups")
         .preview_extension("yaml")
         .json_files()
         .preview(move |graph, library| {

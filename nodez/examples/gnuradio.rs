@@ -664,6 +664,7 @@ fn main() -> eframe::Result {
         .graph(graph)
         .title("nodez \u{2014} GNU Radio flowgraph")
         .file("flowgraph.json")
+        .groups_dir("groups")
         .preview_extension("py")
         .json_files()
         .preview(generate)

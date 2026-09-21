@@ -114,6 +114,8 @@ pub struct EditorApp<N: NodeData = DynNode> {
     /// What the editor asked for this frame, done once it has let go of the
     /// graph.
     pending_group: Wanted,
+    /// Where reusable groups are kept, if anywhere.
+    groups_dir: Option<String>,
 }
 
 /// What the editor asked to do with a group.
@@ -164,6 +166,7 @@ impl<N: NodeData> EditorApp<N> {
             pending_add: None,
             inside: Vec::new(),
             pending_group: Wanted::Nothing,
+            groups_dir: None,
             preview_extension: "out".to_owned(),
         }
     }
@@ -195,6 +198,19 @@ impl<N: NodeData> EditorApp<N> {
     }
 
     /// Extension for the file the preview panel's Write button produces.
+    /// Where to keep reusable groups, the way GNU Radio keeps hier blocks in
+    /// a directory of their own.
+    ///
+    /// Every `.json` group in it is read into the library before the window
+    /// opens, in whatever order they turn out to need, and `Ctrl+G` writes
+    /// what it makes back into it. The file is named after the group's id;
+    /// the id is what saved graphs refer to, so renaming the file is safe and
+    /// renaming the group is what makes a new one.
+    pub fn groups_dir(mut self, path: impl Into<String>) -> Self {
+        self.groups_dir = Some(path.into());
+        self
+    }
+
     pub fn preview_extension(mut self, extension: impl Into<String>) -> Self {
         self.preview_extension = extension.into();
         self
@@ -258,6 +274,7 @@ where
 impl<N: NodeData + 'static> EditorApp<N> {
     /// Open the window and block until it closes.
     pub fn run(mut self) -> eframe::Result {
+        self.load_groups();
         self.regenerate();
         let title = self.title.clone();
         let (theme, panel) = chrome(&self.editor.style);
@@ -754,6 +771,48 @@ impl<N: NodeData> EditorApp<N> {
 
     // ------------------------------------------------------------- groups
 
+    /// Read every group kept beside the app into the library.
+    fn load_groups(&mut self) {
+        let Some(dir) = self.groups_dir.clone() else {
+            return;
+        };
+        let problems = self.library.load_groups(&dir);
+        if !problems.is_empty() {
+            self.status.error(format!(
+                "{} group(s) in {dir} could not be read: {}",
+                problems.len(),
+                problems
+                    .iter()
+                    .map(|(name, why)| format!("{name}: {why}"))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ));
+        }
+    }
+
+    /// Write a group out, so it is there the next time the app starts.
+    fn keep_group(&mut self, template: crate::template::TemplateId) {
+        let Some(dir) = self.groups_dir.clone() else {
+            return;
+        };
+        let id = self.library.expect(template).id.clone();
+        let written = self
+            .library
+            .write_group(template)
+            .map_err(|e| e.to_string())
+            .and_then(|text| {
+                std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                let path = std::path::Path::new(&dir).join(format!("{id}.json"));
+                std::fs::write(&path, text)
+                    .map(|()| path.display().to_string())
+                    .map_err(|e| e.to_string())
+            });
+        match written {
+            Ok(path) => self.status.info(format!("Wrote {path}")),
+            Err(e) => self.status.error(format!("Could not write {id}: {e}")),
+        }
+    }
+
     /// Make a group of the selection, and leave one node in its place.
     ///
     /// The group's id has to be unique in the library and there is nobody to
@@ -783,6 +842,9 @@ impl<N: NodeData> EditorApp<N> {
                 self.editor.state.selection.insert(made);
                 self.editor.state.active = Some(made);
                 self.status.info(format!("Grouped {} nodes as {label}", chosen.len()));
+                if let Some(template) = self.graph.node(made).map(|node| node.template) {
+                    self.keep_group(template);
+                }
                 self.after_edit();
             }
             Err(e) => self.status.error(e.to_string()),
