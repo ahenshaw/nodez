@@ -10,6 +10,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- A `futuresdr` example: the same kind of flowgraph as `gnuradio`, emitting a
+  Rust `main` against FutureSDR 0.8 instead of a Python top block. The pair is
+  the point — the graph, the node kinds and the walk over them are the same
+  shape, and one function differs. What that function has to know more of is
+  that blocks are typed Rust values and that `connect!` reads its endpoints as
+  input port, block, output port, so a second input is `in0.combine_0`.
+
 - Reusable node groups: a graph registered in a `NodeLibrary` as a template,
   the way GNU Radio installs a hier block into its block tree. A group node is
   an ordinary node whose template happens to be a group, so reuse, the add

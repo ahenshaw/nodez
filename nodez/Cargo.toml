@@ -54,3 +54,7 @@ required-features = ["derive", "app"]
 [[example]]
 name = "gnuradio"
 required-features = ["derive", "app"]
+
+[[example]]
+name = "futuresdr"
+required-features = ["derive", "app"]

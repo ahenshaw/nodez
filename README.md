@@ -507,13 +507,14 @@ cargo run -- --print       # generate the sample config headlessly
 [`nodes.rs`](nodez-demo/src/nodes.rs) is the whole domain — wire types, node
 kinds, and what each one emits.
 
-## Two more examples
+## Three more examples
 
-Both generate Python, and both are one file each.
+Each is one file, and each generates code.
 
 ```
 cargo run -p nodez --features derive,app --example blender_nodes
 cargo run -p nodez --features derive,app --example gnuradio
+cargo run -p nodez --features derive,app --example futuresdr
 ```
 
 [`blender_nodes`](nodez/examples/blender_nodes.rs) is a slice of Blender's
@@ -533,10 +534,28 @@ is, and the graph already knows it.
 
 ![The GNU Radio example: a flowgraph, and the top-block script it generates](https://raw.githubusercontent.com/ahenshaw/nodez/main/docs/gnuradio.png)
 
-Both add `--print` to generate without opening a window, and both differ from
-the quickstart in the same way: they walk the graph instead of folding it.
-A shader tree and a flowgraph *are* the artifact, so what a generator wants
-from them is every node and every link, not what they add up to.
+[`futuresdr`](nodez/examples/futuresdr.rs) is the companion to `gnuradio`:
+the same kind of graph, emitting a Rust `main` against
+[FutureSDR](https://www.futuresdr.org/) instead of a Python top block. Worth
+having as a pair, because it shows what changes when the target changes and
+what does not — the graph, the node kinds and the walk over them are the same
+shape, and one function differs.
+
+![The FutureSDR example: a flowgraph, and the Rust program it generates](https://raw.githubusercontent.com/ahenshaw/nodez/main/docs/futuresdr.png)
+
+What that one function has to know more of: FutureSDR blocks are Rust values
+with types, so each is a `let` with the sample type in the turbofish, and
+wires are a `connect!` macro whose endpoints read *input port, block, output
+port* — so a second input is `in0.combine_0`, not `combine_0.in0`. The sockets
+in that example are named after FutureSDR's own ports, and the generator asks
+the template how many stream inputs a block has rather than keeping a table of
+which ones need naming.
+
+All three add `--print` to generate without opening a window, and all three
+differ from the quickstart in the same way: they walk the graph instead of
+folding it. A shader tree and a flowgraph *are* the artifact, so what a
+generator wants from them is every node and every link, not what they add up
+to.
 
 ## Crates
 

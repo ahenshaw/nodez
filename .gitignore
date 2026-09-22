@@ -6,3 +6,5 @@
 /flowgraph.json
 /flowgraph.py
 /groups
+/futuresdr-graph.json
+/futuresdr-graph.rs
