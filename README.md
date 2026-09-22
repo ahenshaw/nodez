@@ -385,16 +385,20 @@ never while one is in flight.
 ## Which way a wire flows
 
 A wire narrows on its way to the input it feeds, so which end is which can be
-read without following it. `EditorStyle::wire_taper` is how much of its width
-it gives up — 0 for a wire of one width, 1 to narrow to a point, and 0.6 by
-default. The demo's Taper box flips it live.
+read without following it. `EditorStyle::wire_taper` is how far its width
+swings either side of `wire_width` — an amount rather than a switch, the way
+`wire_width` is, and 0.6 by default.
+
+Either side, not all of it below. A wire is two pixels across and taking a
+fraction off two pixels is a difference nobody can see, so the near end is
+fattened as much as the far end is thinned. That buys twice the contrast and
+leaves `wire_width` meaning the average, as it did.
 
 egui strokes one width at a time, so a wire that changes width cannot be a
 stroke: each one is a mesh of three quads per step, a core at full color with
 a band either side fading out, which is how egui's own tessellator keeps an
-edge from looking like stairs. At `wire_taper = 0` that draws the same
-uniform wire as before, though not to the same pixels — the anti-aliasing is
-now this crate's rather than egui's.
+edge from looking like stairs. Below a pixel the core stops shrinking and
+starts fading instead, or the thin end would turn from thin into blurry.
 
 The color gradient from the output's type to the input's is still there, so
 direction is said twice.

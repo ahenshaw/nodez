@@ -11,9 +11,11 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Added
 
 - Wires narrow towards the input they feed, so which way one flows can be seen
-  without following it. `EditorStyle::wire_taper` says how much width a wire
-  gives up on the way — 0 for one width throughout, 1 to narrow to a point,
-  0.6 by default — and the demo has a Taper box for it.
+  without following it. `EditorStyle::wire_taper` says how far a wire's width
+  swings either side of `wire_width` on the way — either side, because a wire
+  is two pixels across and taking a fraction off two pixels is a difference
+  nobody can see. An amount rather than a switch, the way `wire_width` is,
+  defaulting to 0.6.
 
 - A `futuresdr` example: the same kind of flowgraph as `gnuradio`, emitting a
   Rust `main` against FutureSDR 0.8 instead of a Python top block. The pair is
@@ -68,10 +70,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Changed
 
 - A wire is drawn as a mesh rather than a stroke, because a stroke in egui has
-  one width for its whole length and a tapered wire does not. At
-  `wire_taper = 0` the result is the same uniform wire, but not the same
-  pixels: the anti-aliasing along a wire's edge is now this crate's rather
-  than egui's.
+  one width for its whole length and a tapered wire does not. The
+  anti-aliasing along a wire's edge is this crate's now rather than egui's, so
+  a wire is a pixel or two different even where its width has not changed.
 - Whether a wire is routed at all is settled at the clearance it was asked to
   keep, rather than at the tightest one on offer. A reduced clearance is how a
   path is *found* when there is no other; it was also, by accident, a reason

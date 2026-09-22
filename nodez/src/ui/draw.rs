@@ -127,8 +127,14 @@ pub(crate) fn paint_wire(
     // Widest where it leaves the output, narrowest where it arrives, which is
     // the whole point: which way a wire flows can be seen without following
     // it to either end.
+    //
+    // The swing is either side of the width asked for rather than all of it
+    // below: a wire is two pixels across and taking a fraction off that is a
+    // difference nobody can see. Fattening the near end as much as the far
+    // end is thinned buys twice the contrast and leaves the graph weighing
+    // the same, since the width asked for is still the average.
     let taper = style.wire_taper.clamp(0.0, 1.0);
-    let narrowing = move |full: f32| move |along: f32| full * (1.0 - taper * along) * 0.5;
+    let narrowing = move |full: f32| move |along: f32| full * (1.0 + taper - 2.0 * taper * along);
 
     // A dark backing ribbon reads as an outline against both nodes and
     // canvas. One ribbon for the whole wire rather than one per curve, so a
@@ -166,12 +172,12 @@ fn flatten(path: &[[Pos2; 4]]) -> Vec<Pos2> {
 /// at full color, and a band either side fading to nothing, which is the same
 /// way egui's own tessellator keeps an edge from looking like stairs.
 ///
-/// `half` is given how far along the wire a point is, from 0 at the output to
-/// 1 at the input, and answers with half the width to draw there.
+/// `width` is given how far along the wire a point is, from 0 at the output
+/// to 1 at the input, and answers with how wide to draw it there.
 fn paint_ribbon(
     painter: &Painter,
     points: &[Pos2],
-    half: impl Fn(f32) -> f32,
+    width: impl Fn(f32) -> f32,
     color: impl Fn(Pos2) -> Color32,
 ) {
     /// How wide the soft edge is. One pixel, the same as egui's own.
@@ -208,8 +214,13 @@ fn paint_ribbon(
         };
         let out = vec2(-heading.y, heading.x);
 
-        let h = half(along[i] / total).max(0.0);
-        let shade = color(*p);
+        // Thinner than a pixel is drawn as a pixel that is barely there,
+        // rather than as geometry too small to land on one. Without this the
+        // thin end of a wire stops getting thinner and starts getting
+        // blurrier, which is the opposite of the point.
+        let w = width(along[i] / total).max(0.0);
+        let (h, fade) = if w < 1.0 { (0.5, w) } else { (w * 0.5, 1.0) };
+        let shade = color(*p).gamma_multiply(fade);
         let base = mesh.vertices.len() as u32;
         // Premultiplied, so a transparent edge is transparent black and
         // cannot leave a halo of the wire's own color.

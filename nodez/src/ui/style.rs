@@ -80,14 +80,19 @@ pub struct EditorStyle {
     /// Dark backing line drawn under each wire, as Blender does.
     pub wire_outline: Color32,
     pub wire_outline_extra_width: f32,
-    /// How much of its width a wire gives up on the way to the input it
-    /// feeds, as a fraction.
+    /// How far a wire's width swings either side of [`Self::wire_width`] on
+    /// its way to the input it feeds, as a fraction.
     ///
-    /// Zero draws a wire of one width, which says nothing about which way
-    /// anything flows and is what this used to do. One narrows it to a point
-    /// where it arrives. In between, the wire is plainly wider where it
-    /// leaves an output than where it meets an input, and a graph can be read
-    /// without following any wire to its end.
+    /// Either side, not all of it below: a wire is two pixels across, and
+    /// taking a fraction off two pixels is a difference nobody can see. So
+    /// the near end is fattened as much as the far end is thinned, which buys
+    /// twice the contrast and leaves `wire_width` meaning what it did, the
+    /// average.
+    ///
+    /// An amount rather than a switch, in the way `wire_width` is: one goes
+    /// from double width down to nothing, and a thinner wire than this crate
+    /// draws by default may want rather less. Zero leaves a wire of one
+    /// width, which says nothing about which way anything flows.
     pub wire_taper: f32,
     /// Horizontal pull of the bezier control points, as a fraction of the
     /// horizontal distance between the two sockets.
