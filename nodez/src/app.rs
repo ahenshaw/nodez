@@ -116,6 +116,8 @@ pub struct EditorApp<N: NodeData = DynNode> {
     pending_group: Wanted,
     /// Where reusable groups are kept, if anywhere.
     groups_dir: Option<String>,
+    /// How much the wires tapered by before the box was unticked.
+    taper: f32,
 }
 
 /// What the editor asked to do with a group.
@@ -167,6 +169,7 @@ impl<N: NodeData> EditorApp<N> {
             inside: Vec::new(),
             pending_group: Wanted::Nothing,
             groups_dir: None,
+            taper: EditorStyle::blender_dark().wire_taper,
             preview_extension: "out".to_owned(),
         }
     }
@@ -486,6 +489,21 @@ impl<N: NodeData> EditorApp<N> {
                     "Unfilled",
                 )
                 .on_hover_text("Mark inputs that have to be wired and are not");
+                // A float, not a flag, so the box remembers what it was set
+                // to rather than forcing everyone back to the default.
+                let mut tapered = self.editor.style.wire_taper > 0.0;
+                if ui
+                    .checkbox(&mut tapered, "Taper")
+                    .on_hover_text("Narrow each wire towards the input it feeds")
+                    .changed()
+                {
+                    self.editor.style.wire_taper = if tapered {
+                        self.taper.max(0.1)
+                    } else {
+                        self.taper = self.editor.style.wire_taper;
+                        0.0
+                    };
+                }
 
                 egui::ComboBox::from_id_salt("nodez-scroll-mode")
                     .width(96.0)

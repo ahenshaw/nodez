@@ -80,6 +80,15 @@ pub struct EditorStyle {
     /// Dark backing line drawn under each wire, as Blender does.
     pub wire_outline: Color32,
     pub wire_outline_extra_width: f32,
+    /// How much of its width a wire gives up on the way to the input it
+    /// feeds, as a fraction.
+    ///
+    /// Zero draws a wire of one width, which says nothing about which way
+    /// anything flows and is what this used to do. One narrows it to a point
+    /// where it arrives. In between, the wire is plainly wider where it
+    /// leaves an output than where it meets an input, and a graph can be read
+    /// without following any wire to its end.
+    pub wire_taper: f32,
     /// Horizontal pull of the bezier control points, as a fraction of the
     /// horizontal distance between the two sockets.
     pub wire_curvature: f32,
@@ -159,6 +168,7 @@ impl EditorStyle {
             wire_width: 2.0,
             wire_outline: Color32::from_rgba_unmultiplied(0x00, 0x00, 0x00, 0xC0),
             wire_outline_extra_width: 1.6,
+            wire_taper: 0.6,
             wire_curvature: 0.5,
             wire_min_curve: 30.0,
             wire_max_curve: 180.0,

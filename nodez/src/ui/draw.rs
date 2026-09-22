@@ -1,12 +1,11 @@
 //! Painting: the grid, node chrome, sockets and noodles.
 
-use egui::epaint::{CubicBezierShape, PathStroke};
 use egui::{Align2, Color32, CornerRadius, FontId, Painter, Pos2, Rect, Shape, Stroke, StrokeKind,
-    pos2, vec2};
+    Vec2, pos2, vec2};
 
 use crate::types::SocketShape;
 
-use super::geometry::{Viewport, wire_path};
+use super::geometry::{Viewport, bezier_point, wire_path};
 use super::style::EditorStyle;
 
 /// How a socket is being drawn right now.
@@ -83,7 +82,8 @@ pub(crate) fn paint_grid(painter: &Painter, viewport: &Viewport, style: &EditorS
     }
 }
 
-/// Paint one noodle, fading from the source socket's color to the target's.
+/// Paint one noodle: fading from the source socket's color to the target's,
+/// and narrowing as it goes.
 #[allow(clippy::too_many_arguments)] // a painting helper; each argument is a distinct visual input
 pub(crate) fn paint_wire(
     painter: &Painter,
@@ -96,21 +96,11 @@ pub(crate) fn paint_wire(
     zoom: f32,
     highlighted: bool,
 ) {
-    let path = wire_path(from, to, waypoints, style, zoom);
-    let width = (style.wire_width * zoom).max(1.0);
-
-    // A dark backing line reads as an outline against both nodes and canvas.
-    // Every segment is laid down before any of the colored pass, so a bend
-    // does not paint its outline over the segment before it.
-    let outline_width = width + style.wire_outline_extra_width * zoom.max(0.5);
-    for points in &path {
-        painter.add(CubicBezierShape::from_points_stroke(
-            *points,
-            false,
-            Color32::TRANSPARENT,
-            PathStroke::new(outline_width, style.wire_outline),
-        ));
+    let points = flatten(&wire_path(from, to, waypoints, style, zoom));
+    if points.len() < 2 {
+        return;
     }
+    let width = (style.wire_width * zoom).max(1.0);
 
     let (a, b) = if highlighted {
         (
@@ -125,22 +115,118 @@ pub(crate) fn paint_wire(
     // it stays put as a wire is rerouted.
     let direction = to - from;
     let length_sq = direction.length_sq().max(1.0);
-    for points in &path {
-        let stroke = if a == b {
-            PathStroke::new(width, a)
+    let shade = move |p: Pos2| {
+        if a == b {
+            a
         } else {
-            PathStroke::new_uv(width, move |_bbox, pos| {
-                let t = ((pos - from).dot(direction) / length_sq).clamp(0.0, 1.0);
-                lerp_color(a, b, t)
-            })
-        };
-        painter.add(CubicBezierShape::from_points_stroke(
-            *points,
-            false,
-            Color32::TRANSPARENT,
-            stroke,
-        ));
+            let t = ((p - from).dot(direction) / length_sq).clamp(0.0, 1.0);
+            lerp_color(a, b, t)
+        }
+    };
+
+    // Widest where it leaves the output, narrowest where it arrives, which is
+    // the whole point: which way a wire flows can be seen without following
+    // it to either end.
+    let taper = style.wire_taper.clamp(0.0, 1.0);
+    let narrowing = move |full: f32| move |along: f32| full * (1.0 - taper * along) * 0.5;
+
+    // A dark backing ribbon reads as an outline against both nodes and
+    // canvas. One ribbon for the whole wire rather than one per curve, so a
+    // bend cannot lay its outline over the stretch before it.
+    let outline = width + style.wire_outline_extra_width * zoom.max(0.5);
+    paint_ribbon(painter, &points, narrowing(outline), |_| style.wire_outline);
+    paint_ribbon(painter, &points, narrowing(width), shade);
+}
+
+/// A wire's curves as one run of points, close enough together to read as a
+/// curve.
+///
+/// Steps to suit each curve's size: the fillet at a corner needs a handful
+/// where a sweep across the canvas needs plenty.
+fn flatten(path: &[[Pos2; 4]]) -> Vec<Pos2> {
+    let mut points: Vec<Pos2> = Vec::new();
+    for curve in path {
+        let rough = curve[0].distance(curve[1]) + curve[1].distance(curve[2])
+            + curve[2].distance(curve[3]);
+        let steps = ((rough / 5.0).ceil() as usize).clamp(2, 32);
+        for step in 0..=steps {
+            let p = bezier_point(curve, step as f32 / steps as f32);
+            if points.last().is_none_or(|last| last.distance(p) > 0.05) {
+                points.push(p);
+            }
+        }
     }
+    points
+}
+
+/// Paint a run of points as a ribbon whose width may change along it.
+///
+/// A stroke in egui has one width for its whole length, so a wire that
+/// narrows cannot be one. This lays down three quads per step instead: a core
+/// at full color, and a band either side fading to nothing, which is the same
+/// way egui's own tessellator keeps an edge from looking like stairs.
+///
+/// `half` is given how far along the wire a point is, from 0 at the output to
+/// 1 at the input, and answers with half the width to draw there.
+fn paint_ribbon(
+    painter: &Painter,
+    points: &[Pos2],
+    half: impl Fn(f32) -> f32,
+    color: impl Fn(Pos2) -> Color32,
+) {
+    /// How wide the soft edge is. One pixel, the same as egui's own.
+    const FEATHER: f32 = 1.0;
+
+    // How far along each point is by distance rather than by index, so a
+    // crowd of short steps around a corner does not spend more of the taper
+    // than one long straight run.
+    let mut along = Vec::with_capacity(points.len());
+    let mut run = 0.0;
+    for (i, p) in points.iter().enumerate() {
+        if i > 0 {
+            run += points[i - 1].distance(*p);
+        }
+        along.push(run);
+    }
+    let total = run.max(0.001);
+
+    let mut mesh = egui::Mesh::default();
+    for (i, p) in points.iter().enumerate() {
+        // Square to the way the wire is going, averaged across a corner so
+        // the two sides of it meet.
+        let back = if i > 0 { *p - points[i - 1] } else { Vec2::ZERO };
+        let on = if i + 1 < points.len() {
+            points[i + 1] - *p
+        } else {
+            Vec2::ZERO
+        };
+        let heading = back + on;
+        let heading = if heading.length_sq() > f32::EPSILON {
+            heading.normalized()
+        } else {
+            vec2(1.0, 0.0)
+        };
+        let out = vec2(-heading.y, heading.x);
+
+        let h = half(along[i] / total).max(0.0);
+        let shade = color(*p);
+        let base = mesh.vertices.len() as u32;
+        // Premultiplied, so a transparent edge is transparent black and
+        // cannot leave a halo of the wire's own color.
+        mesh.colored_vertex(*p - out * (h + FEATHER), Color32::TRANSPARENT);
+        mesh.colored_vertex(*p - out * h, shade);
+        mesh.colored_vertex(*p + out * h, shade);
+        mesh.colored_vertex(*p + out * (h + FEATHER), Color32::TRANSPARENT);
+
+        if i > 0 {
+            let previous = base - 4;
+            for band in 0..3 {
+                mesh.add_triangle(previous + band, previous + band + 1, base + band);
+                mesh.add_triangle(previous + band + 1, base + band + 1, base + band);
+            }
+        }
+    }
+    painter.add(Shape::mesh(mesh));
 }
 
 /// What a socket looks like, apart from how it is being interacted with.

@@ -382,6 +382,23 @@ never while one is in flight.
 `clear_routing` returns how many wires were carrying a bend, and clearing
 `waypoints` on a single connection straightens just that one.
 
+## Which way a wire flows
+
+A wire narrows on its way to the input it feeds, so which end is which can be
+read without following it. `EditorStyle::wire_taper` is how much of its width
+it gives up — 0 for a wire of one width, 1 to narrow to a point, and 0.6 by
+default. The demo's Taper box flips it live.
+
+egui strokes one width at a time, so a wire that changes width cannot be a
+stroke: each one is a mesh of three quads per step, a core at full color with
+a band either side fading out, which is how egui's own tessellator keeps an
+edge from looking like stairs. At `wire_taper = 0` that draws the same
+uniform wire as before, though not to the same pixels — the anti-aliasing is
+now this crate's rather than egui's.
+
+The color gradient from the output's type to the input's is still there, so
+direction is said twice.
+
 ## Marking what is still to be wired
 
 An input that has to be wired and is not gets marked: the node's outline, a
