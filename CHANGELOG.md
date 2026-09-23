@@ -84,6 +84,9 @@ it feeds.
 
 ### Changed
 
+- The `serde` feature now brings `serde_json` with it, because reading and
+  writing a node group is reading and writing a JSON file and `nodez::group`
+  is gated on `serde` rather than on `app`.
 - A wire is drawn as a mesh rather than a stroke, because a stroke in egui has
   one width for its whole length and a tapered wire does not. The
   anti-aliasing along a wire's edge is this crate's now rather than egui's, so
