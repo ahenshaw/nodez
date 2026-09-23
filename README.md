@@ -124,7 +124,9 @@ fn run(graph: &Graph, library: &NodeLibrary, rules: &Rules<Urls>) -> String {
 cargo run -p nodez --features derive,app --example quickstart
 ```
 
-![The quickstart: five nodes building a URL](https://raw.githubusercontent.com/ahenshaw/nodez/main/docs/quickstart.png)
+Or [run it in your browser](https://ahenshaw.github.io/nodez/quickstart/).
+
+[![The quickstart: five nodes building a URL](https://raw.githubusercontent.com/ahenshaw/nodez/main/docs/quickstart.png)](https://ahenshaw.github.io/nodez/quickstart/)
 
 ## The derive, at a glance
 
@@ -529,6 +531,13 @@ cargo run -- --print       # generate the sample config headlessly
 cd nodez-demo && trunk serve   # the editor, in a browser
 ```
 
+Any of the editor examples builds for the browser the same way, from one
+shared page:
+
+```
+cd nodez && trunk serve examples/index.html --example gnuradio
+```
+
 `EditorApp::run` works in a browser unchanged: built for `wasm32` it starts
 on the page's `<canvas id="nodez">`, or on one made to fill the page. With no
 disk there, Save and Load use the browser's local storage, groups are kept
@@ -539,7 +548,9 @@ kinds, and what each one emits.
 
 ## Three more examples
 
-Each is one file, and each generates code.
+Each is one file, and each generates code. Each also runs in a browser:
+[blender_nodes](https://ahenshaw.github.io/nodez/blender_nodes/), [gnuradio](https://ahenshaw.github.io/nodez/gnuradio/),
+[futuresdr](https://ahenshaw.github.io/nodez/futuresdr/).
 
 ```
 cargo run -p nodez --features derive,app --example blender_nodes
@@ -553,7 +564,7 @@ that rebuilds the tree, the way Blender's Node-to-Python addons do. Node
 positions go out with it, so the arrangement made here is the one Blender
 opens with.
 
-![The Blender example: a procedural material, and the bpy script that rebuilds it](https://raw.githubusercontent.com/ahenshaw/nodez/main/docs/blender_nodes.png)
+[![The Blender example: a procedural material, and the bpy script that rebuilds it](https://raw.githubusercontent.com/ahenshaw/nodez/main/docs/blender_nodes.png)](https://ahenshaw.github.io/nodez/blender_nodes/)
 
 [`gnuradio`](nodez/examples/gnuradio.rs) is a slice of GNU Radio's blocks and
 writes the top-block script GNU Radio Companion would. Its Variable block has
@@ -562,7 +573,7 @@ ordinary number input, so wiring one to the other is all it takes for the
 script to say `samp_rate` instead of `320000.0` — which is what a GRC variable
 is, and the graph already knows it.
 
-![The GNU Radio example: a flowgraph, and the top-block script it generates](https://raw.githubusercontent.com/ahenshaw/nodez/main/docs/gnuradio.png)
+[![The GNU Radio example: a flowgraph, and the top-block script it generates](https://raw.githubusercontent.com/ahenshaw/nodez/main/docs/gnuradio.png)](https://ahenshaw.github.io/nodez/gnuradio/)
 
 [`futuresdr`](nodez/examples/futuresdr.rs) is the companion to `gnuradio`:
 the same kind of graph, emitting a Rust `main` against
@@ -571,7 +582,7 @@ having as a pair, because it shows what changes when the target changes and
 what does not — the graph, the node kinds and the walk over them are the same
 shape, and one function differs.
 
-![The FutureSDR example: a flowgraph, and the Rust program it generates](https://raw.githubusercontent.com/ahenshaw/nodez/main/docs/futuresdr.png)
+[![The FutureSDR example: a flowgraph, and the Rust program it generates](https://raw.githubusercontent.com/ahenshaw/nodez/main/docs/futuresdr.png)](https://ahenshaw.github.io/nodez/futuresdr/)
 
 What that one function has to know more of: FutureSDR blocks are Rust values
 with types, so each is a `let` with the sample type in the turbofish, and

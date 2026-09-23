@@ -5,6 +5,10 @@
 //! still there when the page is next opened, and a group kept in `groups/` is
 //! read back like one in a directory. What the preview writes is for use
 //! elsewhere, so in a browser it is downloaded instead.
+//!
+//! Local storage is shared by every page on a host, so the keys start with
+//! the page's own directory: two apps served side by side each see only
+//! their own files, as two apps in two directories would.
 
 pub use imp::*;
 
@@ -62,19 +66,28 @@ mod imp {
             .ok_or_else(|| "this browser has no local storage".to_owned())
     }
 
+    /// The storage key for a path: the path, under the page's directory.
+    fn key(path: &str) -> String {
+        let page = web_sys::window()
+            .and_then(|window| window.location().pathname().ok())
+            .unwrap_or_default();
+        let dir = &page[..page.rfind('/').map_or(0, |i| i + 1)];
+        format!("{dir}{path}")
+    }
+
     fn js(e: JsValue) -> String {
         e.as_string().unwrap_or_else(|| format!("{e:?}"))
     }
 
     pub fn read(path: &str) -> Result<String, String> {
         storage()?
-            .get_item(path)
+            .get_item(&key(path))
             .map_err(js)?
             .ok_or_else(|| format!("nothing saved as {path} in this browser"))
     }
 
     pub fn write(path: &str, text: &str) -> Result<String, String> {
-        storage()?.set_item(path, text).map_err(js)?;
+        storage()?.set_item(&key(path), text).map_err(js)?;
         Ok(format!("{path} (browser storage)"))
     }
 
@@ -106,20 +119,22 @@ mod imp {
         let Ok(storage) = storage() else {
             return Vec::new();
         };
-        let prefix = format!("{}/", dir.trim_end_matches('/'));
+        let dir = format!("{}/", dir.trim_end_matches('/'));
+        let prefix = key(&dir);
         let len = storage.length().unwrap_or(0);
-        let mut keys: Vec<String> = (0..len)
+        let mut names: Vec<String> = (0..len)
             .filter_map(|i| storage.key(i).ok().flatten())
-            .filter(|key| {
-                key.strip_prefix(&prefix)
-                    .is_some_and(|name| !name.contains('/') && name.ends_with(".json"))
+            .filter_map(|key| {
+                let name = key.strip_prefix(&prefix)?;
+                (!name.contains('/') && name.ends_with(".json")).then(|| format!("{dir}{name}"))
             })
             .collect();
-        keys.sort();
-        keys.into_iter()
-            .map(|key| {
-                let text = read(&key);
-                (key, text)
+        names.sort();
+        names
+            .into_iter()
+            .map(|path| {
+                let text = read(&path);
+                (path, text)
             })
             .collect()
     }

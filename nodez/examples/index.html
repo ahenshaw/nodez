@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<!-- The page any of the editor examples is built into for the web:
+     cd nodez && trunk serve examples/index.html --example gnuradio
+     The app sets the title itself. -->
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>nodez</title>
+    <link data-trunk rel="rust" href="../Cargo.toml" data-cargo-features="derive,app" data-wasm-opt="z">
+    <style>
+        html, body { margin: 0; height: 100%; overflow: hidden; background: #1d1d1d; }
+        #nodez { display: block; width: 100vw; height: 100vh; }
+    </style>
+</head>
+<body>
+    <canvas id="nodez"></canvas>
+</body>
+</html>

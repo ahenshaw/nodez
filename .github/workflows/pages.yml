@@ -1,5 +1,6 @@
-# Builds the demo for the browser and publishes it to GitHub Pages, so the
-# README can link to something you can try without installing anything.
+# Builds the demo and the editor examples for the browser and publishes them
+# to GitHub Pages, so the README can link to something you can try without
+# installing anything.
 name: Demo
 
 on:
@@ -30,9 +31,17 @@ jobs:
         run: |
           curl -sSL https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz \
             | tar -xz -C ~/.cargo/bin
+      # The demo at the root, and each editor example in a directory of its
+      # own. The demo goes first: trunk empties its dist directory.
       - name: Build
-        working-directory: nodez-demo
-        run: trunk build --release --public-url /${{ github.event.repository.name }}/ --dist ../target/pages
+        env:
+          SITE: /${{ github.event.repository.name }}
+        run: |
+          (cd nodez-demo && trunk build --release --public-url "$SITE/" --dist ../target/pages)
+          for example in quickstart blender_nodes gnuradio futuresdr; do
+            (cd nodez && trunk build examples/index.html --release --example "$example" \
+              --public-url "$SITE/$example/" --dist "../target/pages/$example")
+          done
       - uses: actions/upload-pages-artifact@v5
         with:
           path: target/pages

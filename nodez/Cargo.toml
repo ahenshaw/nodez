@@ -44,6 +44,7 @@ web-sys = { version = "0.3", optional = true, features = [
     "HtmlAnchorElement",
     "HtmlCanvasElement",
     "HtmlElement",
+    "Location",
     "Storage",
     "Url",
     "console",
