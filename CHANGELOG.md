@@ -8,6 +8,23 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-09-22
+
+A graph can be built out of graphs now. A selection becomes a node, that node
+is a template like any other, and it lives in the library rather than in the
+document — so one group serves every graph that loads it, the way GNU Radio
+installs a hier block into its block tree. Nothing downstream had to learn
+about any of it: `flatten` puts the insides back, and evaluation, traversal
+and every generator carry on seeing one flat graph.
+
+A third generator came with it, and is really there for the comparison. The
+`futuresdr` example emits a Rust program where `gnuradio` emits a Python one,
+over the same kind of graph and the same kind of walk across it, so what
+belongs to the target and what belongs to the editor can be told apart.
+
+And a wire says which way it flows, by giving up width on the way to the input
+it feeds.
+
 ### Added
 
 - Wires narrow towards the input they feed, so which way one flows can be seen
@@ -16,14 +33,12 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   is two pixels across and taking a fraction off two pixels is a difference
   nobody can see. An amount rather than a switch, the way `wire_width` is,
   defaulting to 0.6.
-
 - A `futuresdr` example: the same kind of flowgraph as `gnuradio`, emitting a
   Rust `main` against FutureSDR 0.8 instead of a Python top block. The pair is
   the point — the graph, the node kinds and the walk over them are the same
   shape, and one function differs. What that function has to know more of is
   that blocks are typed Rust values and that `connect!` reads its endpoints as
   input port, block, output port, so a second input is `in0.combine_0`.
-
 - Reusable node groups: a graph registered in a `NodeLibrary` as a template,
   the way GNU Radio installs a hier block into its block tree. A group node is
   an ordinary node whose template happens to be a group, so reuse, the add
@@ -247,7 +262,8 @@ First release: a Blender-style node editor widget for egui, with a typed,
 traversable graph model, `#[derive(NodeType)]` for describing nodes as Rust
 types, and a ready-made editor window behind the `app` feature.
 
-[Unreleased]: https://github.com/ahenshaw/nodez/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/ahenshaw/nodez/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/ahenshaw/nodez/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/ahenshaw/nodez/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/ahenshaw/nodez/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/ahenshaw/nodez/compare/v0.3.0...v0.4.0
