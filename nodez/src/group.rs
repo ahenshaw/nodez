@@ -673,21 +673,17 @@ impl NodeLibrary {
 
     /// Read every group in a directory, in whatever order they need.
     ///
-    /// Not the order the directory gives them: a group built from another has
-    /// to be read second, and nothing about a file says which. So they are
-    /// read in passes until a pass registers nothing, which settles any
-    /// order that can be settled. What is left over is missing a template or
-    /// stands in a circle with another file, and is returned rather than
-    /// half-registered.
+    /// See [`NodeLibrary::read_groups`] for how the order is settled. The
+    /// files are taken sorted by name, so the same directory loads the same
+    /// way twice.
     pub fn load_groups(&mut self, dir: impl AsRef<std::path::Path>) -> Vec<(String, GroupError)> {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return Vec::new();
         };
-        let mut waiting: Vec<(String, String)> = Vec::new();
         let mut problems = Vec::new();
+        let mut files = Vec::new();
         let mut paths: Vec<std::path::PathBuf> =
             entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
-        // Sorted, so the same directory loads the same way twice.
         paths.sort();
         for path in paths {
             if path.extension().is_none_or(|e| e != "json") {
@@ -695,11 +691,29 @@ impl NodeLibrary {
             }
             let name = path.display().to_string();
             match std::fs::read_to_string(&path) {
-                Ok(text) => waiting.push((name, text)),
+                Ok(text) => files.push((name, text)),
                 Err(e) => problems.push((name, GroupError::Unreadable(e.to_string()))),
             }
         }
+        problems.extend(self.read_groups(files));
+        problems
+    }
 
+    /// Read several groups, given as `(name, text)`, in whatever order they
+    /// need.
+    ///
+    /// Not the order they are given in: a group built from another has to be
+    /// read second, and nothing about a file says which. So they are read in
+    /// passes until a pass registers nothing, which settles any order that
+    /// can be settled. What is left over is missing a template or stands in a
+    /// circle with another file, and is returned by name rather than
+    /// half-registered.
+    pub fn read_groups(
+        &mut self,
+        files: impl IntoIterator<Item = (String, String)>,
+    ) -> Vec<(String, GroupError)> {
+        let mut waiting: Vec<(String, String)> = files.into_iter().collect();
+        let mut problems = Vec::new();
         while !waiting.is_empty() {
             let mut left = Vec::new();
             let mut registered = 0;

@@ -14,7 +14,9 @@ Sockets are color-coded and typed: the editor refuses a drag between
 incompatible sockets, and so does the API, so a graph on disk is always
 well-typed. You describe your nodes as Rust structs and the rest is generated.
 
-![The demo app: a node graph on the left, the config it generates on the right](https://raw.githubusercontent.com/ahenshaw/nodez/main/docs/screenshot.png)
+**[Try the demo in your browser →](https://ahenshaw.github.io/nodez/)**
+
+[![The demo app: a node graph on the left, the config it generates on the right](https://raw.githubusercontent.com/ahenshaw/nodez/main/docs/screenshot.png)](https://ahenshaw.github.io/nodez/)
 
 ## Quickstart
 
@@ -519,11 +521,18 @@ Blender's dark theme; `EditorStyle::light()` is the other preset.
 
 [`nodez-demo`](nodez-demo) is the app in the first screenshot: fourteen node
 kinds that generate a container-stack config file.
+[Its web build](https://ahenshaw.github.io/nodez/) is the same program.
 
 ```
 cargo run                  # the editor
 cargo run -- --print       # generate the sample config headlessly
+cd nodez-demo && trunk serve   # the editor, in a browser
 ```
+
+`EditorApp::run` works in a browser unchanged: built for `wasm32` it starts
+on the page's `<canvas id="nodez">`, or on one made to fill the page. With no
+disk there, Save and Load use the browser's local storage, groups are kept
+there too, and the preview's Write downloads the file.
 
 [`nodes.rs`](nodez-demo/src/nodes.rs) is the whole domain — wire types, node
 kinds, and what each one emits.

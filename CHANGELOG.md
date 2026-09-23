@@ -8,6 +8,17 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- `EditorApp` runs in a browser. `run` is the same call; built for `wasm32`
+  it starts on the page's `<canvas id="nodez">`, or one made to fill the page.
+  Save and Load keep files in local storage, groups are kept there too, and
+  the preview's Write downloads what it wrote.
+- `NodeLibrary::read_groups` reads groups from text you already have, in
+  whatever order they need, for when they do not come from a directory.
+- The demo is [built for the web](https://ahenshaw.github.io/nodez/) on every
+  push to `main`.
+
 ## [0.6.0] — 2026-09-22
 
 A graph can be built out of graphs now. A selection becomes a node, that node

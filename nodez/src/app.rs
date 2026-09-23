@@ -20,6 +20,8 @@
 //! [`EditorApp::ui`] draws the same thing inside a `Ui` you already have, for
 //! embedding it in a larger application.
 
+mod files;
+
 use std::collections::HashSet;
 
 use egui::{Color32, RichText};
@@ -273,11 +275,36 @@ where
 #[cfg(feature = "app")]
 impl<N: NodeData + 'static> EditorApp<N> {
     /// Open the window and block until it closes.
+    ///
+    /// In a browser there is no window to open and nothing to block: the app
+    /// is started on the page's `<canvas id="nodez">`, or on a canvas made to
+    /// fill the page if there is none, and this returns straight away.
     pub fn run(mut self) -> eframe::Result {
         self.load_groups();
         self.regenerate();
-        let title = self.title.clone();
+        self.launch()
+    }
+
+    /// Hand the finished app to eframe, pinning its egui theme to the style.
+    fn creator(self) -> eframe::AppCreator<'static> {
         let (theme, panel) = chrome(&self.editor.style);
+        Box::new(move |cc| {
+            // The canvas is painted from EditorStyle, not from egui's
+            // theme, so pin egui to whichever the style is. Left to follow
+            // the system, a light-mode desktop paints this chrome with
+            // near-black text and the sidebar becomes unreadable.
+            cc.egui_ctx.set_theme(theme);
+            cc.egui_ctx.style_mut_of(theme, |style| {
+                style.visuals.panel_fill = panel;
+                style.visuals.window_fill = panel;
+            });
+            Ok(Box::new(self))
+        })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn launch(self) -> eframe::Result {
+        let title = self.title.clone();
         let options = eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
                 .with_inner_size([1480.0, 920.0])
@@ -285,22 +312,50 @@ impl<N: NodeData + 'static> EditorApp<N> {
                 .with_title(&title),
             ..Default::default()
         };
-        eframe::run_native(
-            &title,
-            options,
-            Box::new(move |cc| {
-                // The canvas is painted from EditorStyle, not from egui's
-                // theme, so pin egui to whichever the style is. Left to follow
-                // the system, a light-mode desktop paints this chrome with
-                // near-black text and the sidebar becomes unreadable.
-                cc.egui_ctx.set_theme(theme);
-                cc.egui_ctx.style_mut_of(theme, |style| {
-                    style.visuals.panel_fill = panel;
-                    style.visuals.window_fill = panel;
-                });
-                Ok(Box::new(self))
-            }),
-        )
+        eframe::run_native(&title, options, self.creator())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn launch(self) -> eframe::Result {
+        use wasm_bindgen_futures::wasm_bindgen::JsCast;
+
+        let document = web_sys::window()
+            .and_then(|window| window.document())
+            .expect("a page to run in");
+        if let Some(body) = document.body() {
+            let _ = body.style().set_property("margin", "0");
+        }
+        document.set_title(&self.title);
+        let canvas = match document.get_element_by_id("nodez") {
+            Some(canvas) => canvas,
+            None => {
+                let canvas = document.create_element("canvas").expect("a canvas");
+                canvas.set_id("nodez");
+                if let Some(body) = document.body() {
+                    let _ = body.append_child(&canvas);
+                }
+                canvas
+            }
+        };
+        let canvas: web_sys::HtmlCanvasElement = canvas
+            .dyn_into()
+            .expect("#nodez to be a <canvas>");
+        if canvas.style().get_property_value("width").is_ok_and(|w| w.is_empty()) {
+            let style = canvas.style();
+            let _ = style.set_property("display", "block");
+            let _ = style.set_property("width", "100vw");
+            let _ = style.set_property("height", "100vh");
+        }
+        let creator = self.creator();
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Err(e) = eframe::WebRunner::new()
+                .start(canvas, eframe::WebOptions::default(), creator)
+                .await
+            {
+                web_sys::console::error_1(&e);
+            }
+        });
+        Ok(())
     }
 }
 
@@ -776,7 +831,15 @@ impl<N: NodeData> EditorApp<N> {
         let Some(dir) = self.groups_dir.clone() else {
             return;
         };
-        let problems = self.library.load_groups(&dir);
+        let mut problems = Vec::new();
+        let mut found = Vec::new();
+        for (name, text) in files::read_json_dir(&dir) {
+            match text {
+                Ok(text) => found.push((name, text)),
+                Err(e) => problems.push((name, crate::group::GroupError::Unreadable(e))),
+            }
+        }
+        problems.extend(self.library.read_groups(found));
         if !problems.is_empty() {
             self.status.error(format!(
                 "{} group(s) in {dir} could not be read: {}",
@@ -801,11 +864,8 @@ impl<N: NodeData> EditorApp<N> {
             .write_group(template)
             .map_err(|e| e.to_string())
             .and_then(|text| {
-                std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-                let path = std::path::Path::new(&dir).join(format!("{id}.json"));
-                std::fs::write(&path, text)
-                    .map(|()| path.display().to_string())
-                    .map_err(|e| e.to_string())
+                let path = format!("{}/{id}.json", dir.trim_end_matches('/'));
+                files::write(&path, &text)
             });
         match written {
             Ok(path) => self.status.info(format!("Wrote {path}")),
@@ -975,9 +1035,9 @@ impl<N: NodeData> EditorApp<N> {
             return;
         };
         let written = (persistence.save)(&self.graph)
-            .and_then(|text| std::fs::write(&self.path, text).map_err(|e| e.to_string()));
+            .and_then(|text| files::write(&self.path, &text));
         match written {
-            Ok(()) => self.status.info(format!("Saved {}", self.path)),
+            Ok(path) => self.status.info(format!("Saved {path}")),
             Err(e) => self.status.error(format!("Save failed: {e}")),
         }
     }
@@ -986,9 +1046,7 @@ impl<N: NodeData> EditorApp<N> {
         let Some(persistence) = &self.persistence else {
             return;
         };
-        let loaded = std::fs::read_to_string(&self.path)
-            .map_err(|e| e.to_string())
-            .and_then(|text| (persistence.load)(&text));
+        let loaded = files::read(&self.path).and_then(|text| (persistence.load)(&text));
         match loaded {
             Ok(mut graph) => {
                 let repairs = graph.validate(&self.library);
@@ -1013,8 +1071,8 @@ impl<N: NodeData> EditorApp<N> {
     /// Write the generated text beside the graph file.
     fn write_preview(&mut self) {
         let path = std::path::PathBuf::from(&self.path).with_extension(&self.preview_extension);
-        match std::fs::write(&path, &self.generated.text) {
-            Ok(()) => self.status.info(format!("Wrote {}", path.display())),
+        match files::export(&path.to_string_lossy(), &self.generated.text) {
+            Ok(path) => self.status.info(format!("Wrote {path}")),
             Err(e) => self.status.error(format!("Write failed: {e}")),
         }
     }
