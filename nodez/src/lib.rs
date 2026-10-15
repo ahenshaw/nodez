@@ -20,7 +20,79 @@
 //! [`Graph::connect`] refuses them in code too, so a graph on disk is always
 //! well-typed.
 //!
-//! ## A minimal library
+//! ## Nodes as Rust types
+//!
+//! The usual way in, with the `derive` feature: each kind of node is a struct,
+//! a field with `#[input]` is a socket, and the field's type picks its color
+//! and widget. A [`Fold`] names one way of walking the graph, and
+//! [`Evaluate`] says what each kind contributes to it.
+//!
+//! ```
+//! # #[cfg(feature = "derive")] fn main() {
+//! use nodez::{Evaluate, Fold, Graph, NodeError, NodeLibrary, NodeType, Payload, Rules};
+//!
+//! #[derive(Debug, NodeType)]
+//! #[node(category = "Input", output = String)]
+//! struct Text {
+//!     #[input]
+//!     value: String,
+//! }
+//!
+//! #[derive(Debug, NodeType)]
+//! #[node(category = "Convert", output = String)]
+//! struct Uppercase {
+//!     #[input]
+//!     text: String,
+//! }
+//!
+//! struct Strings;
+//! impl Fold for Strings {}
+//!
+//! impl Evaluate<Strings> for Text {
+//!     fn evaluate(&self) -> Result<String, NodeError> { Ok(self.value.clone()) }
+//! }
+//! impl Evaluate<Strings> for Uppercase {
+//!     fn evaluate(&self) -> Result<String, NodeError> { Ok(self.text.to_uppercase()) }
+//! }
+//!
+//! let mut library = NodeLibrary::new();
+//! let mut rules = Rules::<Strings>::new();
+//! rules.register_all::<(Text, Uppercase)>(&mut library);
+//!
+//! let mut graph = Graph::new();
+//! let a = graph.add_node(&library, library.id("text").unwrap(), egui::pos2(0.0, 0.0));
+//! let b = graph.add_node(&library, library.id("uppercase").unwrap(), egui::pos2(220.0, 0.0));
+//! graph.node_mut(a).unwrap().set_input_value("value", "hello");
+//! graph.connect(&library, (a, "out"), (b, "text")).unwrap();
+//!
+//! let out = graph
+//!     .evaluate::<Payload, NodeError>(&library, b, |ctx| rules.run(&ctx))
+//!     .unwrap();
+//! assert_eq!(*out.downcast::<String>().unwrap(), "HELLO");
+//! # }
+//! # #[cfg(not(feature = "derive"))] fn main() {}
+//! ```
+//!
+//! ## Showing the editor
+//!
+//! ```no_run
+//! # use nodez::{Graph, NodeEditor, NodeLibrary};
+//! # struct App { editor: NodeEditor, library: NodeLibrary, graph: Graph }
+//! # impl App {
+//! fn ui(&mut self, ui: &mut egui::Ui) {
+//!     let response = self.editor.show(ui, &self.library, &mut self.graph);
+//!     if response.changed {
+//!         // regenerate your config file
+//!     }
+//! }
+//! # }
+//! ```
+//!
+//! ## A minimal library, by hand
+//!
+//! The same two nodes without the derive. This is the dynamic model the
+//! derive expands to, and what to reach for when node kinds are only known at
+//! run time.
 //!
 //! ```
 //! use nodez::{Graph, NodeLibrary, NodeTemplate, SocketSpec, Widget};
@@ -62,21 +134,6 @@
 //!     })
 //!     .unwrap();
 //! assert_eq!(out, "HELLO");
-//! ```
-//!
-//! ## Showing the editor
-//!
-//! ```no_run
-//! # use nodez::{Graph, NodeEditor, NodeLibrary};
-//! # struct App { editor: NodeEditor, library: NodeLibrary, graph: Graph }
-//! # impl App {
-//! fn ui(&mut self, ui: &mut egui::Ui) {
-//!     let response = self.editor.show(ui, &self.library, &mut self.graph);
-//!     if response.changed {
-//!         // regenerate your config file
-//!     }
-//! }
-//! # }
 //! ```
 
 #![forbid(unsafe_code)]
