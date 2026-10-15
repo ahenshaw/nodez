@@ -8,6 +8,11 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-10-15
+
+The editor runs in a browser now, and the demo and examples are online beside
+it. The crate docs lead with the derive, which is the usual way in.
+
 ### Added
 
 - `EditorApp` runs in a browser. `run` is the same call; built for `wasm32`
@@ -20,6 +25,11 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - The demo is [built for the web](https://ahenshaw.github.io/nodez/) on every
   push to `main`, and so are the `quickstart`, `blender_nodes`, `gnuradio`
   and `futuresdr` examples, each in a directory of its own beneath it.
+
+### Changed
+
+- The crate docs open with nodes described as Rust types through the derive,
+  then showing the editor, then the hand-built library the derive expands to.
 
 ## [0.6.0] — 2026-09-22
 
@@ -278,7 +288,8 @@ First release: a Blender-style node editor widget for egui, with a typed,
 traversable graph model, `#[derive(NodeType)]` for describing nodes as Rust
 types, and a ready-made editor window behind the `app` feature.
 
-[Unreleased]: https://github.com/ahenshaw/nodez/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/ahenshaw/nodez/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/ahenshaw/nodez/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/ahenshaw/nodez/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/ahenshaw/nodez/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/ahenshaw/nodez/compare/v0.4.0...v0.4.1

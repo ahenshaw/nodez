@@ -22,7 +22,7 @@ well-typed. You describe your nodes as Rust structs and the rest is generated.
 
 ```toml
 [dependencies]
-nodez = { version = "0.2", features = ["derive", "app"] }
+nodez = { version = "0.6", features = ["derive", "app"] }
 ```
 
 Four kinds of node that build URLs. This is a whole program:
