@@ -10,7 +10,7 @@
 use nodez::app::{EditorApp, Preview};
 use nodez::{eframe, egui};
 use nodez::{
-    Evaluate, Fold, Graph, Multi, NodeData, NodeError, NodeLibrary, NodeType, Payload, Rules,
+    Evaluate, Fold, Graph, NodeData, NodeError, NodeLibrary, NodeType, Payload, Rules,
 };
 
 #[derive(Debug, NodeType)]
@@ -33,7 +33,7 @@ struct Join {
     #[param(default = " ")]
     separator: String,
     #[input]
-    parts: Multi<String>,
+    parts: Vec<String>,
 }
 
 struct Words;
@@ -51,7 +51,7 @@ impl Evaluate<Words> for Uppercase {
 }
 impl Evaluate<Words> for Join {
     fn evaluate(&self) -> Result<String, NodeError> {
-        Ok(self.parts.iter().cloned().collect::<Vec<_>>().join(&self.separator))
+        Ok(self.parts.join(&self.separator))
     }
 }
 

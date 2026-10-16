@@ -52,8 +52,8 @@ pub type Payload = Box<dyn Any>;
 #[diagnostic::on_unimplemented(
     message = "`{Self}` cannot travel along a wire",
     label = "sockets and params must be a `SocketType`",
-    note = "for many links, each carrying a `T`, write `Multi<T>`",
-    note = "for one link carrying a collection, declare a newtype: \
+    note = "an `#[input]` of `Vec<T>` takes many links, each carrying a `T`",
+    note = "for one link carrying a whole list, declare a newtype: \
             `#[derive(Clone, SocketType)] struct Names(Vec<String>);`"
 )]
 pub trait SocketType: Clone + 'static {
@@ -137,11 +137,12 @@ primitive_socket_type!(
     Value::as_bool
 );
 
-/// An input socket that accepts any number of links.
+/// An input socket that accepts any number of links, remembering which node
+/// each value came from.
 ///
-/// This is the *arity* of the socket, kept separate from the payload type, so
-/// `Multi<EnvList>` reads as "many links, each carrying a list" and
-/// `Vec<T>` inside a payload keeps its ordinary meaning.
+/// An `#[input]` of plain `Vec<T>` is the same socket and is usually all you
+/// need. Reach for `Multi<T>` when an error should be reported against the
+/// upstream node — see [`Multi::links`].
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Multi<T> {
     values: Vec<T>,

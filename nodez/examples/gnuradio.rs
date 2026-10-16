@@ -185,7 +185,7 @@ struct Throttle {
 )]
 struct Add {
     #[input(label = "in")]
-    inputs: nodez::Multi<Stream>,
+    inputs: Vec<Stream>,
 }
 
 #[derive(Debug, NodeType)]
@@ -200,7 +200,7 @@ struct Add {
 )]
 struct Multiply {
     #[input(label = "in")]
-    inputs: nodez::Multi<Stream>,
+    inputs: Vec<Stream>,
 }
 
 #[derive(Debug, NodeType)]

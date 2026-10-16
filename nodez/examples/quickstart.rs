@@ -5,7 +5,7 @@
 use nodez::app::{EditorApp, Preview};
 use nodez::{eframe, egui};
 use nodez::{
-    Evaluate, Fold, Graph, Multi, NodeError, NodeLibrary, NodeType, Payload, Rules, SocketType,
+    Evaluate, Fold, Graph, NodeError, NodeLibrary, NodeType, Payload, Rules, SocketType,
 };
 
 // 1. The values that travel along wires. `String`, `i64`, `f64` and `bool` are
@@ -17,7 +17,7 @@ struct Url(String);
 
 // 2. The kinds of node. A field with `#[input]` is a socket; a bare field is a
 //    parameter drawn in the node body. The field's type decides the rest:
-//    `Multi<T>` accepts many links, and a type with no inline editor — like
+//    `Vec<T>` accepts many links, and a type with no inline editor — like
 //    `Url` — makes a socket that can only be wired.
 #[derive(Debug, NodeType)]
 #[node(category = "Input", output = String)]
@@ -32,7 +32,7 @@ struct Join {
     #[param(default = "/")]
     separator: String,
     #[input]
-    parts: Multi<String>,
+    parts: Vec<String>,
 }
 
 #[derive(Debug, NodeType)]
@@ -50,7 +50,7 @@ struct Address {
 #[node(category = "Output", produces = String)]
 struct Collect {
     #[input]
-    urls: Multi<Url>,
+    urls: Vec<Url>,
 }
 
 // 3. What each kind does. `Fold` names one way of walking the graph — named
@@ -67,7 +67,7 @@ impl Evaluate<Urls> for Text {
 
 impl Evaluate<Urls> for Join {
     fn evaluate(&self) -> Result<String, NodeError> {
-        Ok(self.parts.iter().cloned().collect::<Vec<_>>().join(&self.separator))
+        Ok(self.parts.join(&self.separator))
     }
 }
 

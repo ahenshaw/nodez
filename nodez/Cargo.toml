@@ -81,3 +81,7 @@ required-features = ["derive", "app"]
 [[example]]
 name = "futuresdr"
 required-features = ["derive", "app"]
+
+[[test]]
+name = "derive"
+required-features = ["derive"]

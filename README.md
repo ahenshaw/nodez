@@ -35,7 +35,7 @@ Four kinds of node that build URLs. This is a whole program:
 ```rust
 use nodez::app::{EditorApp, Preview};
 use nodez::eframe;
-use nodez::{Evaluate, Fold, Graph, Multi, NodeError, NodeLibrary, NodeType, Payload, Rules,
+use nodez::{Evaluate, Fold, Graph, NodeError, NodeLibrary, NodeType, Payload, Rules,
             SocketType};
 
 // 1. Values that travel along wires. String, i64, f64 and bool already are
@@ -58,7 +58,7 @@ struct Join {
     #[param(default = "/")]
     separator: String,
     #[input]
-    parts: Multi<String>,          // Multi: accepts any number of links
+    parts: Vec<String>,            // Vec: accepts any number of links
 }
 
 #[derive(Debug, NodeType)]
@@ -76,7 +76,7 @@ struct Address {
 #[node(category = "Output", produces = String)]
 struct Collect {
     #[input]
-    urls: Multi<Url>,              // Url has no editor, so this is link-only
+    urls: Vec<Url>,                // Url has no editor, so this is link-only
 }
 
 // 3. What each kind does. A `Fold` names one way of walking the graph. It is
@@ -89,7 +89,7 @@ impl Evaluate<Urls> for Text {
 }
 impl Evaluate<Urls> for Join {
     fn evaluate(&self) -> Result<String, NodeError> {
-        Ok(self.parts.iter().cloned().collect::<Vec<_>>().join(&self.separator))
+        Ok(self.parts.join(&self.separator))
     }
 }
 impl Evaluate<Urls> for Address {
@@ -181,7 +181,8 @@ returning anything else from `evaluate`.
 |---|---|
 | `#[input] x: T` | a socket that must be wired |
 | `#[input] x: Option<T>` | a link-only socket that may be wired |
-| `#[input] x: Multi<T>` | a socket accepting any number of links, in order |
+| `#[input] x: Vec<T>` | a socket accepting any number of links, in order |
+| `#[input] x: Multi<T>` | the same, also remembering which node each value came from |
 | `x: T` (no attribute) | a parameter, drawn in the body, never wired |
 
 | `#[input(…)]`, `#[param(…)]` | |
@@ -193,7 +194,7 @@ returning anything else from `evaluate`.
 | `min = …`, `max = …` | clamp a numeric widget, per socket rather than per type |
 | `hide_label` | parameters only: let the widget fill the row |
 
-A `Multi` socket draws one attachment point per link plus an empty one below
+A `Vec` socket draws one attachment point per link plus an empty one below
 them, so where you drop a wire decides where it lands in the order, and dragging
 a link up or down reorders it. The order is stored per link, not inferred from
 when it was made.
@@ -501,7 +502,7 @@ halo behind the socket, and the row's label, all in `EditorStyle`'s
 data type, and it is the only thing that does.
 
 Which inputs those are is read off the schema rather than declared. An input
-with an inline editor has a value to fall back on, a `Multi<T>` may be empty,
+with an inline editor has a value to fall back on, a `Vec<T>` may be empty,
 and an `Option<T>` says outright that the node works without it. What is left
 is an input with nowhere else to look, which is what `SocketSpec::required`
 answers and what the mark is about.

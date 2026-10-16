@@ -4,7 +4,7 @@
 //! a bare field is a parameter drawn in the node body. The field's *type* gives
 //! the socket type, its color and whether it can be typed into, and the outer
 //! wrapper gives the arity — `T` is one required link, `Option<T>` is optional,
-//! `Multi<T>` is a fan-in.
+//! `Vec<T>` is a fan-in.
 //!
 //! Replace this file to describe your own config format.
 //!
@@ -12,7 +12,7 @@
 //! header's from its category. Shapes stay explicit, because they mean
 //! something — a diamond is a per-element value, a square a collection.
 
-use nodez::{Evaluate, Fold, Multi, NodeError, NodeType, SocketType, Value};
+use nodez::{Evaluate, Fold, NodeError, NodeType, SocketType, Value};
 
 // ---------------------------------------------------------------- wire types
 //
@@ -24,8 +24,8 @@ use nodez::{Evaluate, Fold, Multi, NodeError, NodeType, SocketType, Value};
 #[socket(description = "A container image reference.")]
 pub struct ImageRef(String);
 
-/// One link may carry several entries, which is why this is a type of its own
-/// rather than the arity wrapper `Multi`.
+/// One link may carry several entries, which is why this is a type of its own:
+/// a bare `Vec<String>` input would mean many links instead.
 #[derive(Clone, Debug, SocketType)]
 #[socket(shape = "diamond", description = "Environment entries.")]
 pub struct EnvList(Vec<String>);
@@ -171,7 +171,7 @@ pub struct Join {
     #[param(hint = "separator", hide_label)]
     separator: String,
     #[input(description = "Any number of strings, in connection order.")]
-    parts: Multi<String>,
+    parts: Vec<String>,
 }
 
 // -------------------------------------------------------------------- build
@@ -311,17 +311,17 @@ pub struct Service {
     #[input(default = 1, min = 1, max = 64)]
     replicas: i64,
     #[input]
-    environment: Multi<EnvList>,
+    environment: Vec<EnvList>,
     #[input(label = "Env Files")]
-    env_file: Multi<EnvFileRef>,
+    env_file: Vec<EnvFileRef>,
     #[input]
-    ports: Multi<PortMap>,
+    ports: Vec<PortMap>,
     #[input]
-    volumes: Multi<Mount>,
+    volumes: Vec<Mount>,
     #[input]
-    networks: Multi<NetworkDef>,
+    networks: Vec<NetworkDef>,
     #[input(label = "Depends On")]
-    depends_on: Multi<ServiceDef>,
+    depends_on: Vec<ServiceDef>,
     #[input]
     healthcheck: Option<Health>,
 }
@@ -344,9 +344,9 @@ pub struct Stack {
     version: Version,
 
     #[input]
-    services: Multi<ServiceDef>,
+    services: Vec<ServiceDef>,
     #[input]
-    networks: Multi<NetworkDef>,
+    networks: Vec<NetworkDef>,
 }
 
 /// Every node kind, so the library registers in one call.
@@ -399,7 +399,7 @@ impl Evaluate<Config> for Secret {
 
 impl Evaluate<Config> for Join {
     fn evaluate(&self) -> Result<String, NodeError> {
-        Ok(self.parts.iter().cloned().collect::<Vec<_>>().join(&self.separator))
+        Ok(self.parts.join(&self.separator))
     }
 }
 
@@ -508,7 +508,7 @@ impl Evaluate<Config> for Service {
                 Value::map().set("replicas", self.replicas),
             )
             .set_list("ports", self.ports.iter().map(|port| port.0.clone()))
-            // `Multi<EnvList>` is a fan-in of lists: flatten across links.
+            // `Vec<EnvList>` is a fan-in of lists: flatten across links.
             .set_list(
                 "environment",
                 self.environment.iter().flat_map(|list| list.0.iter().cloned()),

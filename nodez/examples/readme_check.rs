@@ -3,7 +3,7 @@
 
 use nodez::app::{EditorApp, Preview};
 use nodez::eframe;
-use nodez::{Evaluate, Fold, Graph, Multi, NodeError, NodeLibrary, NodeType, Payload, Rules,
+use nodez::{Evaluate, Fold, Graph, NodeError, NodeLibrary, NodeType, Payload, Rules,
             SocketType};
 
 // 1. Values that travel along wires. String, i64, f64 and bool already are
@@ -26,7 +26,7 @@ struct Join {
     #[param(default = "/")]
     separator: String,
     #[input]
-    parts: Multi<String>,          // Multi: accepts any number of links
+    parts: Vec<String>,            // Vec: accepts any number of links
 }
 
 #[derive(Debug, NodeType)]
@@ -44,7 +44,7 @@ struct Address {
 #[node(category = "Output", produces = String)]
 struct Collect {
     #[input]
-    urls: Multi<Url>,              // Url has no editor, so this is link-only
+    urls: Vec<Url>,                // Url has no editor, so this is link-only
 }
 
 // 3. What each kind does. A `Fold` names one way of walking the graph. It is
@@ -57,7 +57,7 @@ impl Evaluate<Urls> for Text {
 }
 impl Evaluate<Urls> for Join {
     fn evaluate(&self) -> Result<String, NodeError> {
-        Ok(self.parts.iter().cloned().collect::<Vec<_>>().join(&self.separator))
+        Ok(self.parts.join(&self.separator))
     }
 }
 impl Evaluate<Urls> for Address {

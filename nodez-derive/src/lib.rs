@@ -448,7 +448,7 @@ fn node_impl(input: &DeriveInput) -> syn::Result<TokenStream2> {
                         <#payload as ::nodez::typed::SocketType>::NAME,
                     );
                 } } else { quote!() };
-                let multi = matches!(arity, Arity::Multi)
+                let multi = matches!(arity, Arity::Multi | Arity::Vec)
                     .then(|| quote!(socket = socket.multi();))
                     .unwrap_or_default();
                 // `Option<T>` is the only way a field says an input may be
@@ -487,13 +487,14 @@ fn node_impl(input: &DeriveInput) -> syn::Result<TokenStream2> {
                     }
                 });
 
-                let reader = match arity {
-                    Arity::Required => quote!(required),
-                    Arity::Optional => quote!(optional),
-                    Arity::Multi => quote!(multi),
+                let (reader, finish) = match arity {
+                    Arity::Required => (quote!(required), quote!()),
+                    Arity::Optional => (quote!(optional), quote!()),
+                    Arity::Multi => (quote!(multi), quote!()),
+                    Arity::Vec => (quote!(multi), quote!(.into_vec())),
                 };
                 reads.push(quote! {
-                    #field_ident: ::nodez::typed::__private::#reader::<#payload, __N>(ctx, #name)?
+                    #field_ident: ::nodez::typed::__private::#reader::<#payload, __N>(ctx, #name)?#finish
                 });
             }
         }
@@ -565,6 +566,9 @@ enum Arity {
     Required,
     Optional,
     Multi,
+    /// A fan-in read as a plain `Vec`. `Vec<T>` is never a socket type, so
+    /// on an input it can only mean many links.
+    Vec,
 }
 
 enum Role {
@@ -631,6 +635,16 @@ fn parse_field(field: &syn::Field) -> syn::Result<ParsedField> {
         })?;
     }
 
+    // A param is one value typed in by hand, and there is no list editor, so
+    // a `Vec` here is almost certainly a fan-in missing its `#[input]`.
+    if !is_input && wrapped(&field.ty, "Vec").is_some() {
+        return Err(syn::Error::new_spanned(
+            &field.ty,
+            "a `Vec<T>` field takes many links, so it needs `#[input]`; \
+             for a list typed in by hand, use a `String` and split it",
+        ));
+    }
+
     let role = if is_input {
         let (arity, payload) = classify(&field.ty);
         Role::Input {
@@ -662,6 +676,9 @@ fn spec_hint(hint: &Option<String>, label: &str) -> String {
 fn classify(ty: &Type) -> (Arity, Type) {
     if let Some(inner) = wrapped(ty, "Multi") {
         return (Arity::Multi, inner);
+    }
+    if let Some(inner) = wrapped(ty, "Vec") {
+        return (Arity::Vec, inner);
     }
     if let Some(inner) = wrapped(ty, "Option") {
         return (Arity::Optional, inner);

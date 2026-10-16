@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use nodez::{eframe, egui};
 use nodez::{
-    DynNode, Evaluate, Fold, Graph, Multi, NodeData, NodeError, NodeId, NodeLibrary, NodeTemplate,
+    DynNode, Evaluate, Fold, Graph, NodeData, NodeError, NodeId, NodeLibrary, NodeTemplate,
     NodeType, Payload, Rules, SocketType, Value,
 };
 
@@ -38,7 +38,8 @@ struct ImageRef(String);
 #[socket(shape = "diamond", description = "A published port.")]
 struct PortMap(String);
 
-/// The case that breaks "`Vec<T>` means multi": one link carrying a list.
+/// One link carrying a list. `Vec<T>` on an input already means many links,
+/// so a list that travels as one value is a type of its own.
 #[derive(Clone, Debug, SocketType)]
 #[socket(shape = "diamond", description = "Environment entries.")]
 struct EnvList(Vec<String>);
@@ -74,7 +75,7 @@ enum Restart {
 // ---------------------------------------------------------------------------
 // Nodes. A field carrying `#[input]` is a socket; a bare field is a plain
 // parameter. The field *type* gives the arity: `T` is one required link,
-// `Option<T>` is optional, `Multi<T>` is a fan-in.
+// `Option<T>` is optional, `Vec<T>` is a fan-in.
 // ---------------------------------------------------------------------------
 
 /// Everything on `#[node]` has a default, so a node kind needs only to say what
@@ -103,7 +104,7 @@ struct Port {
     protocol: Protocol,
 }
 
-/// One entry. Wired into `Multi<EnvList>` alongside the node below, this is a
+/// One entry. Wired into `Vec<EnvList>` alongside the node below, this is a
 /// fan-in; on its own it is a link carrying a one-element list.
 #[derive(Debug, NodeType)]
 #[node(label = "Environment Variable", output = EnvList)]
@@ -114,8 +115,7 @@ struct EnvVar {
     value: String,
 }
 
-/// Several entries from one link — the case `Vec<T>` could not tell apart from
-/// a fan-in, and the reason arity lives in `Multi` instead.
+/// Several entries from one link, which is why `EnvList` is a newtype.
 #[derive(Debug, NodeType)]
 #[node(label = "Environment File", output = EnvList)]
 struct EnvFile {
@@ -146,11 +146,11 @@ struct Service {
     /// `Count` offers a widget, so this one can also be typed in.
     #[input(default = 1)]
     replicas: i64,
-    /// Many links, each carrying a *list* — the case `Vec<T>` could not express.
+    /// Many links, each carrying a *list*.
     #[input]
-    environment: Multi<EnvList>,
+    environment: Vec<EnvList>,
     #[input]
-    ports: Multi<PortMap>,
+    ports: Vec<PortMap>,
     /// Optional: `None` when nothing is wired in.
     #[input]
     healthcheck: Option<Health>,
@@ -223,7 +223,7 @@ impl Evaluate<Config> for Service {
                 Value::map().set("replicas", self.replicas),
             )
             .set_list("ports", self.ports.iter().map(|p| p.0.clone()))
-            // `Multi<EnvList>` is a fan-in of lists: flatten across links.
+            // `Vec<EnvList>` is a fan-in of lists: flatten across links.
             .set_list(
                 "environment",
                 self.environment.iter().flat_map(|list| list.0.iter().cloned()),

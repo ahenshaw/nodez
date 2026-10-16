@@ -8,11 +8,19 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- An `#[input]` of plain `Vec<T>` is a fan-in: many links, each carrying a
+  `T`, read in link order. `Vec<T>` is never a socket type, so it cannot mean
+  anything else, and it saves rewriting fields as `Multi<T>`. The README and
+  examples now lead with it. `Multi<T>` still works, and is what to use when
+  an error should name the upstream node.
+
 ### Changed
 
-- A field whose type is not a `SocketType`, such as `Vec<String>`, now gets
-  a compile error that says what to write instead: `Multi<T>` for many
-  links, or a `#[derive(SocketType)]` newtype for one link carrying a list.
+- A field whose type is not a `SocketType` now gets a compile error that says
+  what to write instead, and a `Vec` field without `#[input]` says it needs
+  one.
 
 ## [0.7.0] — 2026-10-15
 
