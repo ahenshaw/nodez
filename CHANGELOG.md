@@ -19,8 +19,8 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Changed
 
 - A field whose type is not a `SocketType` now gets a compile error that says
-  what to write instead, and a `Vec` field without `#[input]` says it needs
-  one.
+  what to write instead, and a `Vec`, `Option` or `Multi` field without
+  `#[input]` says it needs one.
 
 ## [0.7.0] — 2026-10-15
 

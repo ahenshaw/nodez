@@ -644,6 +644,21 @@ fn parse_field(field: &syn::Field) -> syn::Result<ParsedField> {
              for a list typed in by hand, use a `String` and split it",
         ));
     }
+    // Likewise a param always holds a value — its widget's default if nothing
+    // else — so `Option` only means something on a socket that may be unwired.
+    if !is_input && wrapped(&field.ty, "Option").is_some() {
+        return Err(syn::Error::new_spanned(
+            &field.ty,
+            "an `Option<T>` field is a socket that may be left unwired, so it needs \
+             `#[input]`; a param always has a value",
+        ));
+    }
+    if !is_input && wrapped(&field.ty, "Multi").is_some() {
+        return Err(syn::Error::new_spanned(
+            &field.ty,
+            "a `Multi<T>` field takes many links, so it needs `#[input]`",
+        ));
+    }
 
     let role = if is_input {
         let (arity, payload) = classify(&field.ty);
