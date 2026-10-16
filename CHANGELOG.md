@@ -8,6 +8,74 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- Undo and redo for every edit, not just moves: an inline value, a
+  parameter, a wire, a node added, deleted, renamed, muted or resized.
+  `Ctrl`+`Z` steps back, `Ctrl`+`Shift`+`Z` or `Ctrl`+`Y` forward. A drag is
+  one step, and so is a run of typing into one field. Both keys now work
+  while a value widget has focus, as one keeps after a click; a text field
+  being typed into keeps them for its own text. `NodeEditor` gains `undo`,
+  `redo`, `checkpoint` (call it before changing the graph from outside the
+  editor, so that change is undoable too) and `clear_history`;
+  `EditorState` gains `can_undo` and `can_redo`. `EditorApp` has Undo and
+  Redo buttons, checkpoints its own edits, and clears history on Load and on
+  entering or leaving a group.
+- `EditorApp` asks before New, Load or closing the window would lose
+  unsaved changes, offering to save first.
+- `EditorApp` can be made your own. `.toolbar` adds to the toolbar,
+  `.node_menu` adds entries to a node's right-click menu, and `.layout`
+  arranges the window from the app's pieces — `show_canvas`, `show_toolbar`,
+  `show_palette`, `show_inspector`, `show_preview`, `show_status` — and
+  panels of your own. `app.edit` changes the graph from any of them,
+  undoably. A new `custom_app` example does all of it. Underneath,
+  `NodeEditor::node_menu` takes entries for the menu and reports a pick as
+  `EditorAction::NodeMenu`.
+- `Graph::to_json` and `Graph::from_json`: the whole graph, positions and
+  all, written with what it needs to be read back by a library whose
+  templates are in another order, and matched up against it on the way in.
+- A graph remembers a `View` — pan and zoom — set with `Graph::set_view`.
+  `EditorApp` saves it, and opens a graph the way it was left. Files without
+  one read as before.
+- `nodez::egui`, and `nodez::eframe` with the `app` feature: the versions
+  nodez was built against, so an app need not depend on either itself and
+  cannot end up with a second, mismatched copy when egui releases.
+
+### Changed
+
+- `NodeData` requires `Send + Sync + 'static`, since the editor keeps copies
+  of the graph for undo. A payload holding an `Rc` or a borrow no longer
+  qualifies.
+- `EditorState::can_undo_move` is deprecated in favour of `can_undo`.
+- The `typed_nodes` example needs the `app` feature, since it opens a window.
+- `EditorAction` has a new variant, `NodeMenu`.
+- `EditorApp::new` makes an editor for the default payload, so that the
+  closures given to `layout`, `toolbar` and `node_menu` can be inferred. An
+  editor for a payload of your own is `EditorApp::<MyNode>::with_library`.
+- `EditorApp` shows the zoom in the status bar rather than the toolbar, so
+  the toolbar can take buttons of your own at its end.
+
+### Fixed
+
+- Saving while a group was open wrote the group's insides over the graph
+  file. Save now steps back out to the whole graph first, keeping the edits
+  made to the group, and so do Load and New, which would otherwise have made
+  the loaded or new graph into the group.
+- Clicking a step of the group breadcrumb in the toolbar did nothing.
+- Edits made inside a group were registered in the library but never
+  written to the groups directory, so they were gone the next time the app
+  started. Leaving a group writes it back, as making one already did.
+- Leaving a group comes back to the view it was opened from, rather than
+  framing the whole graph afresh.
+- Making a group, and flattening one, could reorder the wires into a
+  multi-input that crossed the group's edge — so a Join on the far side read
+  its parts in a different order, and generated something different, just
+  for the grouping. Each wire now goes back into the place the one it
+  replaces held.
+- The demo generates through groups: it flattens before evaluating, and the
+  inspector counts a group holding the Stack Output as part of what feeds
+  it.
+
 ## [0.6.1] — 2026-10-15
 
 The editor runs in a browser now, and the demo and examples are online beside

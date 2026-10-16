@@ -53,14 +53,17 @@ web-sys = { version = "0.3", optional = true, features = [
 
 [dev-dependencies]
 serde_json = { workspace = true }
-eframe = { workspace = true }
 
 [[example]]
 name = "typed_nodes"
-required-features = ["derive"]
+required-features = ["derive", "app"]
 
 [[example]]
 name = "quickstart"
+required-features = ["derive", "app"]
+
+[[example]]
+name = "custom_app"
 required-features = ["derive", "app"]
 
 [[example]]

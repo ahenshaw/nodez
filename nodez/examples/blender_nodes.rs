@@ -28,6 +28,7 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use nodez::app::{EditorApp, Preview};
+use nodez::{eframe, egui};
 use nodez::{Graph, Node, NodeLibrary, NodeTemplate, NodeType, SocketType, Value};
 
 // ------------------------------------------------------------- wire types

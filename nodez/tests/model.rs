@@ -1,6 +1,6 @@
 //! Tests for the graph model: typing rules, cycle refusal and traversal.
 
-use egui::{Color32, pos2};
+use nodez::egui::{self, Color32, pos2};
 use nodez::{
     ConnectError, Graph, LayoutOptions, NodeId, NodeLibrary, NodeTemplate, SocketSpec, TemplateId,
     Value, Widget,
@@ -917,4 +917,59 @@ fn a_graph_reads_back_against_a_reordered_library() {
         restored.node(a).unwrap().input_value("value").as_deref(),
         Some(&Value::Text("kept".to_owned()))
     );
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn to_json_keeps_everything_a_graph_looks_like() {
+    let f = fixture();
+    let mut graph = Graph::new();
+    let a = graph.add_node(&f.library, f.text, pos2(12.0, 34.0));
+    let j = graph.add_node(&f.library, f.join, pos2(300.0, 40.0));
+    {
+        let node = graph.node_mut(a).unwrap();
+        node.set_input_value("value", "hello");
+        node.title = "Greeting".to_owned();
+        node.width = 222.0;
+        node.collapsed = true;
+        node.muted = true;
+    }
+    graph.node_mut(j).unwrap().set_param("separator", "-");
+    graph.connect(&f.library, (a, "out"), (j, "parts")).unwrap();
+    graph.raise_node(a);
+    graph.set_view(Some(nodez::View { pan: egui::vec2(-50.0, 20.0), zoom: 0.75 }));
+
+    let json = graph.to_json(&f.library).unwrap();
+    let (restored, repairs) = Graph::<nodez::DynNode>::from_json(&json, &f.library).unwrap();
+    assert!(repairs.is_clean(), "{repairs:?}");
+
+    let node = restored.node(a).unwrap();
+    assert_eq!(node.position, pos2(12.0, 34.0));
+    assert_eq!(node.title, "Greeting");
+    assert_eq!(node.width, 222.0);
+    assert!(node.collapsed && node.muted);
+    assert_eq!(node.input_value("value").as_deref(), Some(&Value::Text("hello".to_owned())));
+    assert_eq!(
+        restored.node(j).unwrap().param("separator").as_deref(),
+        Some(&Value::Text("-".to_owned()))
+    );
+    assert_eq!(restored.connection_count(), 1);
+    let order: Vec<_> = restored.nodes_in_draw_order().map(|n| n.id).collect();
+    assert_eq!(order, vec![j, a]);
+    assert_eq!(restored.view(), graph.view());
+
+    // And it is the same file again.
+    assert_eq!(restored.to_json(&f.library).unwrap(), json);
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn a_file_from_before_views_still_reads() {
+    let f = fixture();
+    let mut graph = Graph::new();
+    graph.add_node(&f.library, f.number, pos2(0.0, 0.0));
+    let json = graph.to_json(&f.library).unwrap();
+    assert!(!json.contains("\"view\""));
+    let (restored, _) = Graph::<nodez::DynNode>::from_json(&json, &f.library).unwrap();
+    assert_eq!(restored.view(), None);
 }

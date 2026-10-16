@@ -1,6 +1,6 @@
 //! **Prototype.** `Image`, `Port` and `Service` described as Rust types.
 //!
-//! Run with `cargo run -p nodez --features derive --example typed_nodes`.
+//! Run with `cargo run -p nodez --features derive,app --example typed_nodes`.
 //!
 //! Compare against `nodez-demo/src/domain.rs` (the schema) and
 //! `nodez-demo/src/generate.rs` (the rules), which describe the same three
@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 
+use nodez::{eframe, egui};
 use nodez::{
     DynNode, Evaluate, Fold, Graph, Multi, NodeData, NodeError, NodeId, NodeLibrary, NodeTemplate,
     NodeType, Payload, Rules, SocketType, Value,

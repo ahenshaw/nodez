@@ -13,6 +13,7 @@ mod yaml;
 
 use nodez::EditorStyle;
 use nodez::app::{EditorApp, Preview};
+use nodez::eframe;
 
 fn main() -> eframe::Result {
     let (library, rules) = nodes::library();

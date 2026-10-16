@@ -99,7 +99,10 @@ impl From<&SocketRef> for SocketRef {
 /// Values come back as [`Cow`] so that a payload holding real `Value`s can lend
 /// them, while one backed by typed fields — which has none to lend — can build
 /// one and hand it over. Nobody pays for the other's representation.
-pub trait NodeData: Clone {
+///
+/// A payload is plain data, owned and shareable across threads, because the
+/// editor keeps copies of the graph for undo.
+pub trait NodeData: Clone + Send + Sync + 'static {
     /// A fresh instance of a template, carrying its default values.
     fn new(template: &NodeTemplate) -> Self;
 
@@ -310,6 +313,22 @@ pub struct Graph<N = DynNode> {
         serde(default, skip_serializing_if = "BTreeMap::is_empty")
     )]
     templates: BTreeMap<u32, String>,
+    /// Where the editor was looking when the graph was saved.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    view: Option<View>,
+}
+
+/// Where an editor is looking: what [`Graph::view`] keeps, so a saved graph
+/// opens the way it was left.
+#[derive(Clone, Copy, PartialEq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct View {
+    /// Graph-space offset, as [`EditorState::pan`](crate::EditorState::pan).
+    pub pan: egui::Vec2,
+    pub zoom: f32,
 }
 
 impl<N> Default for Graph<N> {
@@ -321,6 +340,7 @@ impl<N> Default for Graph<N> {
             next_node: 0,
             next_connection: 0,
             templates: BTreeMap::new(),
+            view: None,
         }
     }
 }
@@ -913,6 +933,7 @@ impl<N: NodeData> Graph<N> {
             connections: self.connections.clone(),
             templates: self.templates.clone(),
             order: self.order.clone(),
+            view: self.view,
             ..Default::default()
         };
         for (id, node) in &self.nodes {
@@ -954,6 +975,16 @@ impl<N: NodeData> Graph<N> {
     /// library has nothing to add.
     pub(crate) fn rejoin(&mut self, from: SocketRef, to: SocketRef, order: u32) -> ConnectionId {
         self.insert_connection(from, to, order)
+    }
+
+    /// Take a wire out and leave its place in its socket's order empty, for
+    /// [`Graph::rejoin`] to put a replacement in.
+    ///
+    /// [`Graph::disconnect`] closes the gap, moving the wires after it up one;
+    /// a replacement put back at the old place would then share it with the
+    /// one that moved, and the two could come out either way round.
+    pub(crate) fn unlink(&mut self, id: ConnectionId) -> Option<Connection> {
+        self.connections.remove(&id)
     }
 
     pub fn duplicate_subgraph(
@@ -1035,6 +1066,18 @@ impl<N: NodeData> Graph<N> {
         self.connections.clear();
         self.order.clear();
         self.templates.clear();
+        self.view = None;
+    }
+
+    /// Where the editor was looking when this graph was saved, if it was
+    /// saved with one.
+    pub fn view(&self) -> Option<View> {
+        self.view
+    }
+
+    /// Remember where the editor is looking, to be saved with the graph.
+    pub fn set_view(&mut self, view: Option<View>) {
+        self.view = view;
     }
 
     /// Whether `target` is reachable from `start` by following outputs.
@@ -1058,6 +1101,40 @@ impl<N: NodeData> Graph<N> {
             }
         }
         false
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<N> Graph<N>
+where
+    N: NodeData + serde::Serialize + serde::de::DeserializeOwned,
+{
+    /// The whole graph as JSON: every node with its position, size, title,
+    /// values and state, every wire with its route, the drawing order, and
+    /// the view if one was set with [`Graph::set_view`].
+    ///
+    /// Template ids are written with their names, so the file reads back
+    /// with a library whose templates are registered in a different order,
+    /// or that has gained some since.
+    pub fn to_json(&self, library: &NodeLibrary) -> Result<String, serde_json::Error> {
+        let mut named = self.clone();
+        named.name_templates(library);
+        serde_json::to_string_pretty(&named)
+    }
+
+    /// Read a graph written by [`Graph::to_json`], matched up against
+    /// `library` with [`Graph::validate`]. What could not be matched is
+    /// dropped and counted in the [`Repairs`].
+    ///
+    /// The payload type comes from where the graph goes. Read on its own,
+    /// name it: `Graph::<DynNode>::from_json(..)`, as for [`Graph::default`].
+    pub fn from_json(
+        text: &str,
+        library: &NodeLibrary,
+    ) -> Result<(Self, Repairs), serde_json::Error> {
+        let mut graph: Self = serde_json::from_str(text)?;
+        let repairs = graph.validate(library);
+        Ok((graph, repairs))
     }
 }
 

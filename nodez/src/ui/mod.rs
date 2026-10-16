@@ -6,6 +6,7 @@
 
 mod draw;
 mod geometry;
+mod history;
 mod menu;
 mod style;
 mod widgets;
@@ -62,6 +63,9 @@ pub enum EditorAction {
     LeaveGroup,
     /// A drag was released on an incompatible socket.
     ConnectionRejected(ConnectError),
+    /// One of [`NodeEditor::node_menu`]'s entries was picked from a node's
+    /// context menu.
+    NodeMenu { node: NodeId, item: String },
 }
 
 impl EditorAction {
@@ -70,7 +74,10 @@ impl EditorAction {
     pub fn is_edit(&self) -> bool {
         !matches!(
             self,
-            Self::SelectionChanged | Self::ConnectionRejected(_) | Self::NodesMoved(_)
+            Self::SelectionChanged
+                | Self::ConnectionRejected(_)
+                | Self::NodesMoved(_)
+                | Self::NodeMenu { .. }
         )
     }
 }
@@ -113,18 +120,12 @@ pub enum ScrollMode {
     Zoom,
 }
 
-/// How many bulk moves `Ctrl`+`Z` can walk back.
-const UNDO_DEPTH: usize = 64;
-
 /// What the pointer is currently doing.
 #[derive(Clone, Debug)]
 enum Interaction {
     Idle,
     /// Dragging the selection with the mouse held down.
-    DragNodes {
-        moved: bool,
-        origins: Vec<(NodeId, Pos2)>,
-    },
+    DragNodes { moved: bool },
     /// Blender's `G`: nodes follow the pointer until a click confirms.
     Grab {
         start: Pos2,
@@ -170,11 +171,8 @@ pub struct EditorState {
     /// Remembered across frames because egui smooths a scroll out over several
     /// of them, and only the first carries the originating event.
     scroll_is_trackpad: bool,
-    /// Where nodes were before each of the last few bulk moves.
-    ///
-    /// Positions only: this undoes a drag, a grab or an align, not an edit to
-    /// the graph's contents.
-    position_undo: Vec<Vec<(NodeId, Pos2)>>,
+    /// Undo and redo.
+    history: history::History,
 }
 
 impl Default for EditorState {
@@ -190,7 +188,7 @@ impl Default for EditorState {
             rename_buffer: String::new(),
             raise: None,
             scroll_is_trackpad: false,
-            position_undo: Vec::new(),
+            history: history::History::default(),
         }
     }
 }
@@ -215,23 +213,19 @@ impl EditorState {
         self.active = None;
     }
 
-    /// Whether `Ctrl`+`Z` has a move to undo.
-    pub fn can_undo_move(&self) -> bool {
-        !self.position_undo.is_empty()
+    /// Whether `Ctrl`+`Z` has anything to undo.
+    pub fn can_undo(&self) -> bool {
+        self.history.can_undo()
     }
 
-    /// Remember where nodes were, so the move about to happen can be undone.
-    ///
-    /// Drops the oldest entry once the stack is full, and ignores an empty
-    /// snapshot so undo never stops on a no-op.
-    fn push_undo(&mut self, origins: Vec<(NodeId, Pos2)>) {
-        if origins.is_empty() {
-            return;
-        }
-        if self.position_undo.len() == UNDO_DEPTH {
-            self.position_undo.remove(0);
-        }
-        self.position_undo.push(origins);
+    /// Whether `Ctrl`+`Shift`+`Z` has anything to redo.
+    pub fn can_redo(&self) -> bool {
+        self.history.can_redo()
+    }
+
+    #[deprecated(since = "0.7.0", note = "undo covers every edit now; use `can_undo`")]
+    pub fn can_undo_move(&self) -> bool {
+        self.can_undo()
     }
 
     /// Cancel any drag, grab or popup in progress.
@@ -273,6 +267,9 @@ pub struct NodeEditor {
     pub id: Option<Id>,
     /// What a bare scroll does.
     pub scroll_mode: ScrollMode,
+    /// Entries of your own for a node's right-click menu, shown below the
+    /// built-in ones. Picking one reports [`EditorAction::NodeMenu`].
+    pub node_menu: Vec<String>,
     /// The rect the editor was last drawn in, used when framing the view.
     last_screen: Rect,
 }
@@ -284,6 +281,7 @@ impl Default for NodeEditor {
             style: EditorStyle::default(),
             id: None,
             scroll_mode: ScrollMode::default(),
+            node_menu: Vec::new(),
             last_screen: Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)),
         }
     }
@@ -313,6 +311,47 @@ impl NodeEditor {
         }
         .visible_graph_rect()
         .center()
+    }
+
+    /// Step back one edit, as `Ctrl`+`Z` does. Returns whether the graph
+    /// changed.
+    pub fn undo<N: NodeData>(&mut self, graph: &mut Graph<N>) -> bool {
+        let changed = self.state.history.undo(graph);
+        self.after_restore(graph, changed)
+    }
+
+    /// Take back an undo, as `Ctrl`+`Shift`+`Z` does. Returns whether the
+    /// graph changed.
+    pub fn redo<N: NodeData>(&mut self, graph: &mut Graph<N>) -> bool {
+        let changed = self.state.history.redo(graph);
+        self.after_restore(graph, changed)
+    }
+
+    /// Make the change you are about to make to `graph` undoable.
+    ///
+    /// The editor records its own edits. Call this before one made from
+    /// outside it — a node added from a palette, a selection grouped, the
+    /// graph cleared — and `Ctrl`+`Z` will take that back too.
+    pub fn checkpoint<N: NodeData>(&mut self, graph: &Graph<N>) {
+        self.state.history.checkpoint(graph);
+    }
+
+    /// Forget every step undo and redo could take. For when the graph being
+    /// shown is replaced by a different one, such as a file being loaded.
+    pub fn clear_history(&mut self) {
+        self.state.history.clear();
+    }
+
+    /// Drop selected nodes that an undo or redo took away.
+    fn after_restore<N: NodeData>(&mut self, graph: &Graph<N>, changed: bool) -> bool {
+        if changed {
+            self.state.cancel_interaction();
+            self.state.selection.retain(|id| graph.node(*id).is_some());
+            if self.state.active.is_some_and(|id| graph.node(id).is_none()) {
+                self.state.active = None;
+            }
+        }
+        changed
     }
 
     /// Frame the whole graph in the view.
@@ -358,6 +397,7 @@ impl NodeEditor {
         graph: &mut Graph<N>,
     ) -> EditorResponse {
         let mut actions = Vec::new();
+        let before = self.state.history.wants_before().then(|| graph.clone());
         self.last_screen = rect;
 
         let background = ui.allocate_rect(rect, Sense::click_and_drag());
@@ -436,10 +476,39 @@ impl NodeEditor {
             ops.push(menu_action);
         }
 
+        let (steps, ops): (Vec<Op>, Vec<Op>) =
+            ops.into_iter().partition(|op| matches!(op, Op::Undo | Op::Redo));
         changed |= self.apply(ops, graph, library, &mut actions);
 
         if let Some(node) = self.state.raise.take() {
             graph.raise_node(node);
+        }
+
+        let moved = actions.iter().any(|a| matches!(a, EditorAction::NodesMoved(_)));
+        let typing = ui
+            .ctx()
+            .text_edit_focused()
+            .then(|| ui.memory(|m| m.focused()))
+            .flatten();
+        self.state.history.end_frame(
+            before,
+            history::Frame {
+                edited: changed || moved,
+                in_flight: matches!(
+                    self.state.interaction,
+                    Interaction::DragNodes { .. }
+                        | Interaction::Grab { .. }
+                        | Interaction::Resize { .. }
+                ),
+                pointer_down: ui.input(|i| i.pointer.any_down()),
+                typing,
+            },
+        );
+        for step in steps {
+            changed |= match step {
+                Op::Undo => self.undo(graph),
+                _ => self.redo(graph),
+            };
         }
         if !self.state.interaction.is_idle() {
             ui.ctx().request_repaint();
@@ -773,12 +842,7 @@ impl NodeEditor {
             if !self.state.is_selected(geom.id) {
                 self.click_node(geom.id, modifiers, actions);
             }
-            // Snapshot now: by the time the drag ends the positions are gone.
-            let origins = self.selection_positions(graph);
-            self.state.interaction = Interaction::DragNodes {
-                moved: false,
-                origins,
-            };
+            self.state.interaction = Interaction::DragNodes { moved: false };
         }
         if let Interaction::DragNodes { moved, .. } = &mut self.state.interaction
             && response.dragged_by(PointerButton::Primary)
@@ -795,10 +859,9 @@ impl NodeEditor {
             }
         }
         if response.drag_stopped()
-            && let Interaction::DragNodes { moved, origins } = self.state.interaction.clone()
+            && let Interaction::DragNodes { moved } = self.state.interaction
         {
             if moved {
-                self.state.push_undo(origins);
                 actions.push(EditorAction::NodesMoved(
                     self.state.selection.iter().copied().collect(),
                 ));
@@ -806,7 +869,7 @@ impl NodeEditor {
             self.state.interaction = Interaction::Idle;
         }
 
-        self.node_context_menu(&response, geom.id, ops);
+        self.node_context_menu(&response, geom.id, ops, actions);
 
         // Resize grip on the right edge.
         let grip = geom.resize_handle(5.0 * zoom);
@@ -837,6 +900,11 @@ impl NodeEditor {
                 .clamp(self.style.min_node_width, self.style.max_node_width);
         }
         if grip_response.drag_stopped() {
+            if let Interaction::Resize { node, start_width, .. } = self.state.interaction
+                && graph.node(node).is_some_and(|n| n.width != start_width)
+            {
+                self.state.history.mark_edited();
+            }
             self.state.interaction = Interaction::Idle;
         }
 
@@ -1188,7 +1256,13 @@ impl NodeEditor {
         });
     }
 
-    fn node_context_menu(&mut self, response: &Response, node: NodeId, ops: &mut Vec<Op>) {
+    fn node_context_menu(
+        &mut self,
+        response: &Response,
+        node: NodeId,
+        ops: &mut Vec<Op>,
+        actions: &mut Vec<EditorAction>,
+    ) {
         response.context_menu(|ui| {
             if ui.button("Rename\u{2026}").clicked() {
                 self.state.renaming = Some(node);
@@ -1216,6 +1290,18 @@ impl NodeEditor {
             if ui.button("Delete").clicked() {
                 ops.push(Op::DeleteSelected);
                 ui.close();
+            }
+            if !self.node_menu.is_empty() {
+                ui.separator();
+            }
+            for item in &self.node_menu {
+                if ui.button(item).clicked() {
+                    actions.push(EditorAction::NodeMenu {
+                        node,
+                        item: item.clone(),
+                    });
+                    ui.close();
+                }
             }
         });
     }
@@ -1638,11 +1724,9 @@ impl NodeEditor {
         ops: &mut Vec<Op>,
         actions: &mut Vec<EditorAction>,
     ) {
-        // Never steal keys from a focused text field.
-        if ui.memory(|m| m.focused()).is_some() || self.state.menu.is_some() {
-            return;
-        }
-        if !background.contains_pointer() && !background.has_focus() {
+        if self.state.menu.is_some()
+            || (!background.contains_pointer() && !background.has_focus())
+        {
             return;
         }
 
@@ -1663,6 +1747,25 @@ impl NodeEditor {
                 })
                 .collect()
         });
+
+        // Undo and redo work while a value widget has focus, which it keeps
+        // after being clicked, but not while a text field does: that field
+        // has an undo of its own, for the text in it.
+        if !ui.ctx().text_edit_focused() && self.state.interaction.is_idle() {
+            for (key, modifiers) in &presses {
+                match key {
+                    Key::Z if modifiers.command && modifiers.shift => ops.push(Op::Redo),
+                    Key::Z if modifiers.command => ops.push(Op::Undo),
+                    Key::Y if modifiers.command => ops.push(Op::Redo),
+                    _ => {}
+                }
+            }
+        }
+        // Never steal any other key from a focused widget.
+        if ui.memory(|m| m.focused()).is_some() {
+            return;
+        }
+
         let pointer = ui.input(|i| i.pointer.hover_pos());
 
         for (key, modifiers) in presses {
@@ -1689,7 +1792,6 @@ impl NodeEditor {
                         }
                     }
                 }
-                Key::Z if modifiers.command => ops.push(Op::UndoMove),
                 Key::H => ops.push(Op::ToggleCollapseSelected),
                 Key::M => ops.push(Op::ToggleMuteSelected),
                 Key::X | Key::Delete => ops.push(Op::DeleteSelected),
@@ -1744,11 +1846,9 @@ impl NodeEditor {
             }
             self.state.interaction = Interaction::Idle;
         } else if confirm {
-            let origins = origins.clone();
             actions.push(EditorAction::NodesMoved(
                 origins.iter().map(|(id, _)| *id).collect(),
             ));
-            self.state.push_undo(origins);
             self.state.interaction = Interaction::Idle;
         }
     }
@@ -1994,7 +2094,6 @@ impl NodeEditor {
                 false
             }
             Op::AlignSelected(to) => {
-                let origins = self.selection_positions(graph);
                 let style = &self.style;
                 let moved = crate::layout::align(
                     graph,
@@ -2002,10 +2101,9 @@ impl NodeEditor {
                     to,
                     |graph, node| node_size(graph, library, node, style),
                 );
-                self.finish_move(origins, moved, actions)
+                self.finish_move(moved, actions)
             }
             Op::DistributeSelected(axis, spacing) => {
-                let origins = self.selection_positions(graph);
                 let style = &self.style;
                 let moved = crate::layout::distribute(
                     graph,
@@ -2014,22 +2112,10 @@ impl NodeEditor {
                     spacing,
                     |graph, node| node_size(graph, library, node, style),
                 );
-                self.finish_move(origins, moved, actions)
+                self.finish_move(moved, actions)
             }
-            Op::UndoMove => {
-                let Some(origins) = self.state.position_undo.pop() else {
-                    return false;
-                };
-                for (id, position) in &origins {
-                    if let Some(node) = graph.node_mut(*id) {
-                        node.position = *position;
-                    }
-                }
-                actions.push(EditorAction::NodesMoved(
-                    origins.into_iter().map(|(id, _)| id).collect(),
-                ));
-                false
-            }
+            // Taken out before `apply`: they replace the whole graph.
+            Op::Undo | Op::Redo => false,
             Op::FrameAll => {
                 self.frame(graph, library, None);
                 false
@@ -2042,22 +2128,18 @@ impl NodeEditor {
         }
     }
 
-    /// Bank an undo snapshot and report the move, if anything actually moved.
+    /// Report the move, if anything actually moved.
     ///
     /// Returns false either way: moving a node is not an edit to the graph's
     /// contents, which is the same line [`EditorAction::is_edit`] draws.
     fn finish_move(
         &mut self,
-        origins: Vec<(NodeId, Pos2)>,
         moved: Vec<NodeId>,
         actions: &mut Vec<EditorAction>,
     ) -> bool {
         if moved.is_empty() {
             return false;
         }
-        // Undo the whole selection, not just the nodes that shifted, so a
-        // second align lands back where the first one started.
-        self.state.push_undo(origins);
         actions.push(EditorAction::NodesMoved(moved));
         false
     }
@@ -2165,7 +2247,8 @@ enum Op {
     RestorePositions(Vec<(NodeId, Pos2)>),
     AlignSelected(crate::layout::Align),
     DistributeSelected(crate::layout::Axis, crate::layout::Spacing),
-    UndoMove,
+    Undo,
+    Redo,
     FrameAll,
     FrameSelected,
 }

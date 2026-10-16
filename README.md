@@ -25,10 +25,16 @@ well-typed. You describe your nodes as Rust structs and the rest is generated.
 nodez = { version = "0.6", features = ["derive", "app"] }
 ```
 
+There is no need to add `egui` or `eframe` yourself: use `nodez::egui` and
+`nodez::eframe`, which are the versions nodez was built against. A separate
+`cargo add egui` takes the newest egui, and once that moves past nodez's, the
+two copies' types no longer fit together.
+
 Four kinds of node that build URLs. This is a whole program:
 
 ```rust
 use nodez::app::{EditorApp, Preview};
+use nodez::eframe;
 use nodez::{Evaluate, Fold, Graph, Multi, NodeError, NodeLibrary, NodeType, Payload, Rules,
             SocketType};
 
@@ -251,11 +257,91 @@ its own id, so uncategorised nodes stay distinguishable from each other.
 | `Shift`+`D` | duplicate, keeping the wires between the copies |
 | `X` / `Del` | delete the selection |
 | `H` / `M` | collapse / mute |
-| `Ctrl`+`Z` | undo the last move |
+| `Ctrl`+`Z` / `Ctrl`+`Shift`+`Z` | undo / redo any edit: a value, a wire, a node, a move |
 | `A` / `Alt`+`A` | select all / none |
 | `Home` / `.` | frame everything / the selection |
 | Double-click a header | rename |
 | `RMB` on a node | context menu, including align and spacing |
+
+## Making the app your own
+
+`EditorApp` is built from pieces, and every one of them is yours to place,
+leave out, or add to. Small changes are a call each:
+
+```rust
+EditorApp::new(library)
+    // A button after the built-in ones.
+    .toolbar(|ui, app| {
+        if ui.button("Copy JSON").clicked()
+            && let Ok(json) = app.graph.to_json(&app.library)
+        {
+            ui.ctx().copy_text(json);
+        }
+    })
+    // An entry in every node's right-click menu.
+    .node_menu("Reset to defaults", |app, node| {
+        app.edit(|graph, library| {
+            let node = graph.node_mut(node).unwrap();
+            node.data = NodeData::new(library.expect(node.template));
+        });
+    })
+```
+
+`app.edit` is how a change made from outside the canvas joins in: it can be
+undone like any other, and the preview and the wires keep up with it.
+
+For more than that, `.layout` arranges the window yourself. It is called
+every frame with the app, whose pieces each draw into whatever `Ui` they are
+given: `show_canvas`, `show_toolbar`, `show_palette`, `show_inspector`,
+`show_preview` and `show_status`. Leave one out and it is gone; put your own
+panels beside them.
+
+```rust
+EditorApp::new(library)
+    .layout(|ui, app| {
+        egui::Panel::top("toolbar").show(ui, |ui| {
+            ui.horizontal(|ui| app.show_toolbar(ui));
+        });
+        egui::Panel::left("palette").show(ui, |ui| app.show_palette(ui));
+        egui::Panel::right("mine").show(ui, |ui| {
+            ui.heading("Mine");
+            ui.label(format!("{} nodes", app.graph.node_count()));
+        });
+        egui::CentralPanel::no_frame().show(ui, |ui| app.show_canvas(ui));
+    })
+```
+
+`show_canvas` is the one every layout needs: it is the editor, and it is what
+regenerates the preview, routes the wires, opens groups and asks before
+unsaved work is lost.
+
+[`custom_app`](nodez/examples/custom_app.rs) does all of this, with a panel
+showing the graph as it would be saved —
+[run it in your browser](https://ahenshaw.github.io/nodez/custom_app/).
+
+```
+cargo run -p nodez --features derive,app --example custom_app
+```
+
+## Saving a graph
+
+```rust
+let json = graph.to_json(&library)?;
+let (graph, repairs) = Graph::from_json(&json, &library)?;
+```
+
+What is saved is everything the graph looks like: each node's position,
+width, title, collapsed and muted state, values and parameters; each wire and
+the route it takes; the drawing order; and, if one is set with
+`graph.set_view`, where the editor was looking. `EditorApp`'s Save sets the
+view, so a graph opens the way it was left.
+
+Node kinds are written by name, so a file reads back with a library that
+registers them in another order or has gained some since. Anything that
+cannot be matched — a node kind that has gone, a wire into a socket that has
+— is dropped, and `repairs` counts it. Groups are not inside the file: they
+live in the library, and a graph that uses one needs it loaded, which
+`groups_dir` does.
 
 ## Reading a graph
 
@@ -518,6 +604,12 @@ if response.changed {
 `InputChanged`, `ConnectionRejected(..)` — and `editor.state` holds pan, zoom
 and selection. `EditorStyle` holds every color and metric, defaulting to
 Blender's dark theme; `EditorStyle::light()` is the other preset.
+
+Undo and redo come with it. The editor records its own edits, a drag or a
+run of typing into one field as a single step; for a change your app makes
+to the graph, call `editor.checkpoint(&graph)` first and `Ctrl`+`Z` takes
+that back too. `editor.clear_history()` is for when a different graph is
+loaded in its place.
 
 ## The demo
 

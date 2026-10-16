@@ -2,6 +2,7 @@
 //! README is wrong.
 
 use nodez::app::{EditorApp, Preview};
+use nodez::eframe;
 use nodez::{Evaluate, Fold, Graph, Multi, NodeError, NodeLibrary, NodeType, Payload, Rules,
             SocketType};
 

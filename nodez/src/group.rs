@@ -359,28 +359,42 @@ fn expand(graph: &mut Graph, library: &NodeLibrary, at: NodeId) {
     let outputs = pad_links(inside, library, OUTPUT_PAD, &mapping, false);
     let _ = template;
 
+    // Every wire is rejoined into the very place the one it replaces held, so
+    // a multi-input reads in the same order afterwards. That means unlinking
+    // rather than disconnecting: the places have to stay empty to be refilled.
+    let pads = pad_nodes(inside, library, &mapping);
+    let scaffolding: Vec<_> = graph
+        .connections()
+        .filter(|c| pads.contains(&c.from.node) || pads.contains(&c.to.node))
+        .map(|c| c.id)
+        .collect();
+    for id in scaffolding {
+        graph.unlink(id);
+    }
     let touching: Vec<_> = graph
         .connections()
         .filter(|c| c.from.node == at || c.to.node == at)
         .map(|c| (c.id, c.from.clone(), c.to.clone(), c.order))
         .collect();
     for (id, from, to, order) in touching {
-        graph.disconnect(id);
+        graph.unlink(id);
         if to.node == at {
-            // Into the group: rejoin to everything that pad fed inside.
-            for inner in inputs.get(&to.socket).into_iter().flatten() {
-                graph.rejoin(from.clone(), inner.clone(), order);
+            // Into the group: rejoin to everything that pad fed inside, each
+            // where the pad's own wire was.
+            for (inner, place) in inputs.get(&to.socket).into_iter().flatten() {
+                graph.rejoin(from.clone(), inner.clone(), *place);
             }
         } else {
             // Out of the group: rejoin from whatever fed that pad inside.
-            if let Some(inner) = outputs.get(&from.socket).and_then(|v| v.first()) {
+            if let Some((inner, _)) = outputs.get(&from.socket).and_then(|v| v.first()) {
                 graph.rejoin(inner.clone(), to.clone(), order);
             }
         }
     }
 
-    // The pads and the group node itself have done their work.
-    for id in pad_nodes(inside, library, &mapping) {
+    // The pads and the group node itself have done their work, and have no
+    // wires left to take with them.
+    for id in pads {
         graph.remove_node(id);
     }
     graph.remove_node(at);
@@ -388,17 +402,18 @@ fn expand(graph: &mut Graph, library: &NodeLibrary, at: NodeId) {
 
 /// Where each pad's wires go once the interior has been copied in: for an
 /// input pad, the sockets it feeds; for an output pad, the socket feeding it.
+/// Each with the place the wire held in its socket's order.
 fn pad_links(
     inside: &Graph,
     library: &NodeLibrary,
     kind: &str,
     mapping: &HashMap<NodeId, NodeId>,
     outward: bool,
-) -> HashMap<String, Vec<SocketRef>> {
+) -> HashMap<String, Vec<(SocketRef, u32)>> {
     let Some(template) = library.id(kind) else {
         return HashMap::new();
     };
-    let mut out: HashMap<String, Vec<SocketRef>> = HashMap::new();
+    let mut out: HashMap<String, Vec<(SocketRef, u32)>> = HashMap::new();
     for node in inside.nodes_of_template(template) {
         let name = node
             .param(PAD_NAME)
@@ -418,7 +433,7 @@ fn pad_links(
             };
             out.entry(name.clone())
                 .or_default()
-                .push(SocketRef::new(moved, far.socket.clone()));
+                .push((SocketRef::new(moved, far.socket.clone()), link.order));
         }
     }
     out
@@ -482,7 +497,7 @@ pub fn make_group(
         .collect();
     links.sort_by_key(|(id, _, _, _)| id.0);
 
-    let mut ways_in: Vec<(SocketRef, Vec<SocketRef>)> = Vec::new();
+    let mut ways_in: Vec<(SocketRef, Vec<(SocketRef, u32)>)> = Vec::new();
     let mut ways_out: Vec<(SocketRef, Vec<(SocketRef, u32)>)> = Vec::new();
     for (id, from, to, order) in &links {
         let (source, target) = (chosen.contains(&from.node), chosen.contains(&to.node));
@@ -501,7 +516,7 @@ pub fn make_group(
                 let Some(&b) = moved.get(&to.node) else {
                     continue;
                 };
-                let landing = SocketRef::new(b, to.socket.clone());
+                let landing = (SocketRef::new(b, to.socket.clone()), *order);
                 match ways_in.iter_mut().find(|(outside, _)| outside == from) {
                     Some((_, inner)) => inner.push(landing),
                     None => ways_in.push((from.clone(), vec![landing])),
@@ -532,13 +547,13 @@ pub fn make_group(
     for (outside, landings) in &ways_in {
         let at = landings
             .first()
-            .and_then(|l| inside.node(l.node))
+            .and_then(|(l, _)| inside.node(l.node))
             .map_or(middle, |n| n.position);
         let name = spare(
             &mut taken,
             landings
                 .first()
-                .and_then(|l| socket_label(&inside, library, l, true))
+                .and_then(|(l, _)| socket_label(&inside, library, l, true))
                 .unwrap_or_else(|| "in".to_owned()),
         );
         let pad = inside.add_node(library, pad_in, egui::pos2(at.x - 200.0, at.y));
@@ -546,8 +561,10 @@ pub fn make_group(
             .node_mut(pad)
             .expect("just added")
             .set_param(PAD_NAME, crate::value::Value::from(name.as_str()));
-        for landing in landings {
-            inside.rejoin(SocketRef::new(pad, "out"), landing.clone(), 0);
+        // Each into the place the outside wire held, which the wires copied
+        // in from inside have left free.
+        for (landing, place) in landings {
+            inside.rejoin(SocketRef::new(pad, "out"), landing.clone(), *place);
         }
         inputs.push((name, outside.clone()));
     }
@@ -569,7 +586,17 @@ pub fn make_group(
 
     let template = library.register_group(id, label, category, inside)?;
 
-    // Out with the selection, in with the one node that stands for it.
+    // Out with the selection, in with the one node that stands for it. The
+    // wires crossing out are unlinked first, so the places they held outside
+    // stay free for the stand-in's wires to take.
+    let crossing: Vec<_> = outer
+        .connections()
+        .filter(|c| chosen.contains(&c.from.node) && !chosen.contains(&c.to.node))
+        .map(|c| c.id)
+        .collect();
+    for id in crossing {
+        outer.unlink(id);
+    }
     for id in &ids {
         outer.remove_node(*id);
     }
@@ -760,8 +787,84 @@ mod tests {
                 .output(SocketSpec::new("out", text)),
         );
         library.register(NodeTemplate::new("sink", "Sink").input(SocketSpec::new("value", text)));
+        library.register(
+            NodeTemplate::new("list", "List")
+                .input(SocketSpec::new("items", text).multi())
+                .output(SocketSpec::new("out", text)),
+        );
         register_pads(&mut library);
         (library, text)
+    }
+
+    /// Three Text nodes, "0", "1" and "2", wired into a List in that order.
+    fn three_into_a_list(library: &NodeLibrary) -> (Graph, [NodeId; 3], NodeId) {
+        let mut graph = Graph::new();
+        let list = graph.add_node(library, library.id("list").unwrap(), pos2(400.0, 0.0));
+        let texts = [0, 1, 2].map(|i| {
+            let id = graph.add_node(library, library.id("text").unwrap(), pos2(0.0, 100.0 * i as f32));
+            graph.node_mut(id).unwrap().set_input_value("value", i.to_string());
+            graph.connect(library, (id, "out"), (list, "items")).unwrap();
+            id
+        });
+        (graph, texts, list)
+    }
+
+    /// What feeds the List, in its order: each Text's value.
+    fn list_order(graph: &Graph, list: NodeId) -> Vec<String> {
+        graph
+            .links_into(list, "items")
+            .map(|link| {
+                let node = graph.node(link.from.node).unwrap();
+                node.input_value("value")
+                    .and_then(|v| v.as_str().map(str::to_owned))
+                    .unwrap_or_else(|| node.title.clone())
+            })
+            .collect()
+    }
+
+    /// Grouping and flattening are rewiring, and must not reorder what a
+    /// multi-input receives: the order is the user's, and it is meaning.
+    fn keeps_list_order(chosen: impl Fn([NodeId; 3], NodeId) -> Vec<NodeId>) {
+        let (mut library, _) = fixture();
+        let (mut graph, texts, list) = three_into_a_list(&library);
+        let chosen: HashSet<NodeId> = chosen(texts, list).into_iter().collect();
+        make_group(&mut graph, &mut library, &chosen, "grouped", "Grouped", "Group").unwrap();
+
+        // With the List still outside, the group node takes the places of the
+        // Texts it swallowed.
+        if graph.contains_node(list) {
+            let expected: Vec<String> = texts
+                .iter()
+                .enumerate()
+                .map(|(i, t)| if chosen.contains(t) { "Grouped".to_owned() } else { i.to_string() })
+                .collect();
+            assert_eq!(list_order(&graph, list), expected);
+        }
+
+        // The List itself may have gone inside: find whichever there is.
+        let flat = graph.flatten(&library);
+        let list = flat.nodes_of_template(library.id("list").unwrap()).next().unwrap().id;
+        assert_eq!(list_order(&flat, list), ["0", "1", "2"]);
+    }
+
+    #[test]
+    fn the_middle_of_three_grouped_keeps_its_place() {
+        keeps_list_order(|texts, _| vec![texts[1]]);
+    }
+
+    #[test]
+    fn a_list_grouped_with_outside_feeds_keeps_their_order() {
+        keeps_list_order(|_, list| vec![list]);
+    }
+
+    #[test]
+    fn a_list_grouped_with_one_of_its_feeds_keeps_their_order() {
+        keeps_list_order(|texts, list| vec![texts[1], list]);
+    }
+
+    #[test]
+    fn the_first_of_three_grouped_keeps_its_place() {
+        keeps_list_order(|texts, _| vec![texts[0]]);
     }
 
     /// Two inputs into a Join, out again: the inside of a group.

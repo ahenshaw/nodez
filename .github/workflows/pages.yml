@@ -38,7 +38,7 @@ jobs:
           SITE: /${{ github.event.repository.name }}
         run: |
           (cd nodez-demo && trunk build --release --public-url "$SITE/" --dist ../target/pages)
-          for example in quickstart blender_nodes gnuradio futuresdr; do
+          for example in quickstart custom_app blender_nodes gnuradio futuresdr; do
             (cd nodez && trunk build examples/index.html --release --example "$example" \
               --public-url "$SITE/$example/" --dist "../target/pages/$example")
           done

@@ -139,6 +139,13 @@
 #![forbid(unsafe_code)]
 #![warn(missing_debug_implementations)]
 
+// The egui (and eframe) this crate was built against, so an app can use them
+// through `nodez::egui` rather than adding its own copy and risking a second,
+// incompatible version when egui moves on.
+pub use egui;
+#[cfg(feature = "app")]
+pub use eframe;
+
 #[cfg(feature = "app")]
 pub mod app;
 pub mod graph;
@@ -173,7 +180,7 @@ pub use typed::{
 
 pub use graph::{
     Connection, ConnectError, ConnectionId, CycleError, DynNode, Graph, Node, NodeData, NodeId,
-    Repairs, SocketKind, SocketRef,
+    Repairs, SocketKind, SocketRef, View,
 };
 pub use layout::{
     Align, Axis, LayoutOptions, RouteOptions, Spacing, align, distribute, layered, route_links,

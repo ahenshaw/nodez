@@ -17,8 +17,23 @@
 //! # .unwrap();
 //! ```
 //!
-//! [`EditorApp::ui`] draws the same thing inside a `Ui` you already have, for
-//! embedding it in a larger application.
+//! ## Making it your own
+//!
+//! * [`EditorApp::toolbar`] adds buttons to the toolbar, and
+//!   [`EditorApp::node_menu`] adds entries to a node's right-click menu.
+//! * [`EditorApp::layout`] arranges the window yourself, from the app's
+//!   pieces — [`show_canvas`](EditorApp::show_canvas),
+//!   [`show_toolbar`](EditorApp::show_toolbar),
+//!   [`show_palette`](EditorApp::show_palette),
+//!   [`show_inspector`](EditorApp::show_inspector),
+//!   [`show_preview`](EditorApp::show_preview) and
+//!   [`show_status`](EditorApp::show_status) — and panels of your own.
+//! * [`EditorApp::edit`] changes the graph from any of these, undoably.
+//! * [`EditorApp::ui`] draws the whole thing inside a `Ui` you already have,
+//!   for embedding it in a larger application.
+//!
+//! What is saved is the whole graph, positions and view included; see
+//! [`Graph::to_json`].
 
 mod files;
 
@@ -26,7 +41,7 @@ use std::collections::HashSet;
 
 use egui::{Color32, RichText};
 
-use crate::graph::{DynNode, Graph, NodeData, NodeId};
+use crate::graph::{DynNode, Graph, NodeData, NodeId, View};
 use crate::template::{NodeLibrary, TemplateId};
 use crate::ui::{EditorAction, EditorStyle, NodeEditor, ScrollMode, free_position, node_size};
 
@@ -61,6 +76,10 @@ impl Preview {
 }
 
 type PreviewFn<N> = Box<dyn Fn(&Graph<N>, &NodeLibrary) -> Preview>;
+/// Draws into a `Ui` with the whole app to hand.
+type UiFn<N> = Box<dyn FnMut(&mut egui::Ui, &mut EditorApp<N>)>;
+/// Runs when an entry added with [`EditorApp::node_menu`] is picked.
+type NodeMenuFn<N> = Box<dyn FnMut(&mut EditorApp<N>, NodeId)>;
 type SaveFn<N> = Box<dyn Fn(&Graph<N>) -> Result<String, String>>;
 type LoadFn<N> = Box<dyn Fn(&str) -> Result<Graph<N>, String>>;
 
@@ -100,42 +119,43 @@ pub struct EditorApp<N: NodeData = DynNode> {
     persistence: Option<Persistence<N>>,
     generated: Preview,
     status: Status,
-    show_inspector: bool,
+    inspector_open: bool,
     /// Whether wires are steered around the nodes in their way.
     route_wires: bool,
     /// Frame the graph once the editor's rect is known.
     frame_next: bool,
     /// Route a graph that arrived whole, before it is first drawn.
     route_next: bool,
-    /// A template the palette asked to add, applied after the panel closes.
-    pending_add: Option<TemplateId>,
     preview_extension: String,
     /// The groups being edited, outermost first. Empty means the graph the
     /// app was given.
     inside: Vec<Opened<N>>,
-    /// What the editor asked for this frame, done once it has let go of the
-    /// graph.
-    pending_group: Wanted,
     /// Where reusable groups are kept, if anywhere.
     groups_dir: Option<String>,
+    /// Whether the graph has changed since it was last saved, loaded or
+    /// started afresh.
+    modified: bool,
+    /// Something that would throw away unsaved changes, waiting on an answer.
+    confirm: Option<Discard>,
+    /// The window may close: its changes were saved or let go.
+    may_close: bool,
+    /// The arrangement of the pieces, if not the default.
+    layout: Option<UiFn<N>>,
+    /// Set while that arrangement is drawing, when `layout` is out of its
+    /// slot.
+    laying_out: bool,
+    /// More for the toolbar, after the built-in buttons.
+    toolbar: Option<UiFn<N>>,
+    /// What each entry added to the node menu does, by label.
+    node_menu: Vec<(String, NodeMenuFn<N>)>,
 }
 
-/// What the editor asked to do with a group.
-#[derive(Default)]
-enum Wanted {
-    #[default]
-    Nothing,
-    Group(Vec<NodeId>),
-    Enter(NodeId),
-    Leave,
-    /// Back out until only this many groups are open.
-    LeaveTo(usize),
-}
-
-impl Wanted {
-    fn group(nodes: &[NodeId]) -> Self {
-        Self::Group(nodes.to_vec())
-    }
+/// What would throw away unsaved changes.
+#[derive(Clone, Copy)]
+enum Discard {
+    New,
+    Load,
+    Close,
 }
 
 /// A group opened for editing: which template it is, and the graph it was
@@ -147,10 +167,26 @@ impl Wanted {
 struct Opened<N: NodeData> {
     template: TemplateId,
     outer: Graph<N>,
+    /// Where the editor was looking at `outer`, to come back to.
+    view: View,
+}
+
+impl EditorApp<DynNode> {
+    /// An editor for graphs with the default payload.
+    ///
+    /// Pinned to [`DynNode`] for the same reason [`Graph::new`] is: a default
+    /// type parameter takes no part in inference, and the closures handed to
+    /// [`layout`](Self::layout) and friends would otherwise have nothing to
+    /// infer it from. With a payload of your own, use
+    /// [`with_library`](Self::with_library).
+    pub fn new(library: NodeLibrary) -> Self {
+        Self::with_library(library)
+    }
 }
 
 impl<N: NodeData> EditorApp<N> {
-    pub fn new(library: NodeLibrary) -> Self {
+    /// An editor for graphs of any payload: `EditorApp::<MyNode>::with_library(..)`.
+    pub fn with_library(library: NodeLibrary) -> Self {
         Self {
             library,
             graph: Graph::default(),
@@ -161,15 +197,20 @@ impl<N: NodeData> EditorApp<N> {
             persistence: None,
             generated: Preview::default(),
             status: Status::default(),
-            show_inspector: true,
+            inspector_open: true,
             route_wires: true,
             frame_next: true,
             route_next: true,
-            pending_add: None,
             inside: Vec::new(),
-            pending_group: Wanted::Nothing,
             groups_dir: None,
             preview_extension: "out".to_owned(),
+            modified: false,
+            confirm: None,
+            may_close: false,
+            layout: None,
+            laying_out: false,
+            toolbar: None,
+            node_menu: Vec::new(),
         }
     }
 
@@ -185,7 +226,21 @@ impl<N: NodeData> EditorApp<N> {
     /// Start from an existing graph rather than an empty one.
     pub fn graph(mut self, graph: Graph<N>) -> Self {
         self.graph = graph;
+        self.open_view();
         self
+    }
+
+    /// Look where the graph was last looked at, if it remembers, and frame
+    /// all of it if not.
+    fn open_view(&mut self) {
+        match self.graph.view() {
+            Some(view) => {
+                self.editor.state.pan = view.pan;
+                self.editor.state.zoom = view.zoom;
+                self.frame_next = false;
+            }
+            None => self.frame_next = true,
+        }
     }
 
     pub fn title(mut self, title: impl Into<String>) -> Self {
@@ -248,6 +303,95 @@ impl<N: NodeData> EditorApp<N> {
             load: Box::new(load),
         });
         self
+    }
+
+    /// Arrange the window yourself.
+    ///
+    /// `f` is called every frame in place of [`EditorApp::default_layout`],
+    /// and builds the window from the app's pieces — `show_canvas`,
+    /// `show_toolbar`, `show_palette`, `show_inspector`, `show_preview`,
+    /// `show_status` — and any panels of your own, in whatever arrangement
+    /// you like. Leave a piece out and it is not shown.
+    ///
+    /// ```no_run
+    /// # fn library() -> nodez::NodeLibrary { todo!() }
+    /// use nodez::egui;
+    ///
+    /// nodez::app::EditorApp::new(library())
+    ///     .layout(|ui, app| {
+    ///         egui::Panel::left("palette").show(ui, |ui| app.show_palette(ui));
+    ///         egui::Panel::right("mine").show(ui, |ui| {
+    ///             ui.label(format!("{} nodes", app.graph.node_count()));
+    ///         });
+    ///         egui::CentralPanel::default().show(ui, |ui| app.show_canvas(ui));
+    ///     })
+    ///     .run()
+    /// # .unwrap();
+    /// ```
+    pub fn layout(mut self, f: impl FnMut(&mut egui::Ui, &mut EditorApp<N>) + 'static) -> Self {
+        self.layout = Some(Box::new(f));
+        self
+    }
+
+    /// Add to the toolbar. `f` draws after the built-in buttons, with the
+    /// whole app to hand; change the graph through [`EditorApp::edit`] so the
+    /// change is undoable and the preview keeps up.
+    pub fn toolbar(mut self, f: impl FnMut(&mut egui::Ui, &mut EditorApp<N>) + 'static) -> Self {
+        self.toolbar = Some(Box::new(f));
+        self
+    }
+
+    /// Add an entry to every node's right-click menu. `f` runs with the
+    /// node that was clicked when the entry is picked.
+    pub fn node_menu(
+        mut self,
+        label: impl Into<String>,
+        f: impl FnMut(&mut EditorApp<N>, NodeId) + 'static,
+    ) -> Self {
+        let label = label.into();
+        self.editor.node_menu.push(label.clone());
+        self.node_menu.push((label, Box::new(f)));
+        self
+    }
+
+    /// Change the graph from outside the editor: undoably, and with the
+    /// preview regenerated and the wires rerouted afterwards.
+    pub fn edit<R>(&mut self, f: impl FnOnce(&mut Graph<N>, &NodeLibrary) -> R) -> R {
+        self.editor.checkpoint(&self.graph);
+        let result = f(&mut self.graph, &self.library);
+        self.after_edit();
+        result
+    }
+
+    /// Show a message in the status bar.
+    pub fn status(&mut self, message: impl Into<String>) {
+        self.status.info(message);
+    }
+
+    /// Show an error in the status bar.
+    pub fn status_error(&mut self, message: impl Into<String>) {
+        self.status.error(message);
+    }
+
+    /// What the preview callback last produced.
+    pub fn generated(&self) -> &Preview {
+        &self.generated
+    }
+
+    /// Whether the graph has changed since it was last saved, loaded or
+    /// started afresh.
+    pub fn is_modified(&self) -> bool {
+        self.modified
+    }
+
+    fn run_node_menu(&mut self, item: &str, node: NodeId) {
+        let mut entries = std::mem::take(&mut self.node_menu);
+        if let Some((_, f)) = entries.iter_mut().find(|(label, _)| label == item) {
+            f(self, node);
+        }
+        // Anything added while the entries were out stays, after them.
+        entries.append(&mut self.node_menu);
+        self.node_menu = entries;
     }
 
     fn regenerate(&mut self) {
@@ -367,214 +511,36 @@ impl<N: NodeData + 'static> eframe::App for EditorApp<N> {
 }
 
 impl<N: NodeData> EditorApp<N> {
-    /// Draw the whole thing inside a `Ui`.
+    /// Draw the whole thing inside a `Ui`: the arrangement set with
+    /// [`EditorApp::layout`], or [`EditorApp::default_layout`].
     pub fn ui(&mut self, ui: &mut egui::Ui) {
-        // A graph that arrives whole -- the one the app was built with, or one
-        // just loaded -- has never been past the router. Route it before it is
-        // drawn, rather than leaving it straight until the first edit.
-        if self.route_next {
-            self.route_next = false;
-            self.apply_routing();
-        }
-        self.top_bar(ui);
-        self.status_bar(ui);
-        self.side_panel(ui);
-        if self.preview.is_some() {
-            self.preview_panel(ui);
-        }
-
-        egui::CentralPanel::no_frame().show(ui, |ui| {
-            if self.frame_next {
-                self.frame_next = false;
-                let rect = ui.available_rect_before_wrap();
-                self.editor.fit_to_graph(rect, &self.graph, &self.library);
+        match self.layout.take() {
+            Some(mut layout) => {
+                self.laying_out = true;
+                layout(ui, self);
+                self.laying_out = false;
+                self.layout = Some(layout);
             }
-            let mut wanted = Wanted::Nothing;
-            let response = self.editor.show(ui, &self.library, &mut self.graph);
-            if response.changed
-                && let Some(preview) = &self.preview
-            {
-                self.generated = preview(&self.graph, &self.library);
-            }
-            // Keep the wires routed as the graph changes. Both of these land
-            // once an edit or a drag is finished, not while one is in flight,
-            // so this costs nothing per frame.
-            let moved = response
-                .actions
-                .iter()
-                .any(|a| matches!(a, EditorAction::NodesMoved(_)));
-            if self.route_wires && (response.changed || moved) {
-                self.apply_routing();
-            }
-            for action in &response.actions {
-                match action {
-                    EditorAction::ConnectionRejected(e) => self.status.error(e.to_string()),
-                    EditorAction::GroupSelection(nodes) => wanted = Wanted::group(nodes),
-                    EditorAction::EnterGroup(id) => wanted = Wanted::Enter(*id),
-                    EditorAction::LeaveGroup => wanted = Wanted::Leave,
-                    _ => {}
-                }
-            }
-            self.pending_group = wanted;
-        });
-
-        match std::mem::take(&mut self.pending_group) {
-            Wanted::Nothing => {}
-            Wanted::Group(nodes) => self.group_selection(&nodes),
-            Wanted::Enter(id) => self.enter_group(id),
-            Wanted::Leave => self.leave_group(),
-            Wanted::LeaveTo(depth) => {
-                while self.inside.len() > depth {
-                    self.leave_group();
-                }
-            }
-        }
-
-        // Adding from the palette needs the graph, which the panel borrowed.
-        // There is no cursor to place it under, so it goes in the first open
-        // space near the middle of the view rather than always the same spot.
-        if let Some(template) = self.pending_add.take() {
-            let id = self
-                .graph
-                .add_node(&self.library, template, self.editor.view_center());
-            if let Some((preferred, size)) = self.graph.node(id).map(|node| {
-                (
-                    node.position,
-                    node_size(&self.graph, &self.library, node, &self.editor.style),
-                )
-            }) {
-                let free = free_position(
-                    &self.graph,
-                    &self.library,
-                    &self.editor.style,
-                    size,
-                    preferred - size / 2.0,
-                    Some(id),
-                );
-                if let Some(node) = self.graph.node_mut(id) {
-                    node.position = free;
-                }
-            }
-            self.editor.state.select_only(id);
-            self.regenerate();
-            self.status.info("Added a node.");
+            None => self.default_layout(ui),
         }
     }
 
-    fn top_bar(&mut self, ui: &mut egui::Ui) {
+    /// The standard arrangement: toolbar along the top, status along the
+    /// bottom, palette and inspector on the left, the preview on the right if
+    /// there is one, and the canvas in what is left.
+    ///
+    /// A layout of your own is built from the same pieces —
+    /// [`show_toolbar`](Self::show_toolbar), [`show_palette`](Self::show_palette),
+    /// [`show_inspector`](Self::show_inspector), [`show_preview`](Self::show_preview),
+    /// [`show_status`](Self::show_status) and [`show_canvas`](Self::show_canvas) —
+    /// each of which draws into whatever `Ui` it is given.
+    pub fn default_layout(&mut self, ui: &mut egui::Ui) {
         egui::Panel::top("nodez-toolbar").show(ui, |ui| {
             ui.add_space(3.0);
-            ui.horizontal(|ui| {
-                if ui.button("New").clicked() {
-                    self.graph.clear();
-                    self.editor.state.clear_selection();
-                    self.regenerate();
-                    self.frame_next = true;
-                    self.status.info("New graph.");
-                }
-                ui.separator();
-
-                if self.persistence.is_some() {
-                    if ui.button("Load").clicked() {
-                        self.load();
-                    }
-                    if ui.button("Save").clicked() {
-                        self.save();
-                    }
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.path)
-                            .desired_width(240.0)
-                            .hint_text("graph.json"),
-                    );
-                    ui.separator();
-                }
-
-                if ui.button("Auto layout").clicked() {
-                    self.auto_layout();
-                }
-                if ui.button("Frame all").clicked() {
-                    self.frame_next = true;
-                }
-                ui.checkbox(&mut self.editor.style.show_grid, "Grid");
-                if ui
-                    .checkbox(&mut self.route_wires, "Route")
-                    .on_hover_text("Steer wires around the nodes in their way")
-                    .changed()
-                {
-                    self.apply_routing();
-                }
-                ui.checkbox(&mut self.show_inspector, "Inspector");
-                // Where you are, when you are inside a group. Clicking a step
-                // goes back out to it.
-                if !self.inside.is_empty() {
-                    ui.separator();
-                    let mut back_to = None;
-                    if ui.link(&self.path).clicked() {
-                        back_to = Some(0);
-                    }
-                    let names: Vec<String> = self
-                        .inside
-                        .iter()
-                        .skip(1)
-                        .map(|open| self.library.expect(open.template).label.clone())
-                        .chain(std::iter::once(
-                            self.inside
-                                .last()
-                                .map(|open| self.library.expect(open.template).label.clone())
-                                .unwrap_or_default(),
-                        ))
-                        .collect();
-                    for (depth, name) in names.iter().enumerate() {
-                        ui.label(RichText::new("\u{203A}").weak());
-                        if depth + 1 == names.len() {
-                            ui.label(RichText::new(name).strong());
-                        } else if ui.link(name).clicked() {
-                            back_to = Some(depth + 1);
-                        }
-                    }
-                    if let Some(depth) = back_to {
-                        self.pending_group = Wanted::LeaveTo(depth);
-                    }
-                }
-                ui.checkbox(
-                    &mut self.editor.style.show_missing_inputs,
-                    "Unfilled",
-                )
-                .on_hover_text("Mark inputs that have to be wired and are not");
-
-                egui::ComboBox::from_id_salt("nodez-scroll-mode")
-                    .width(96.0)
-                    .selected_text(match self.editor.scroll_mode {
-                        ScrollMode::Auto => "Scroll: auto",
-                        ScrollMode::Pan => "Scroll: pan",
-                        ScrollMode::Zoom => "Scroll: zoom",
-                    })
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(
-                            &mut self.editor.scroll_mode,
-                            ScrollMode::Auto,
-                            "Auto (pan on trackpad)",
-                        );
-                        ui.selectable_value(&mut self.editor.scroll_mode, ScrollMode::Pan, "Pan");
-                        ui.selectable_value(&mut self.editor.scroll_mode, ScrollMode::Zoom, "Zoom");
-                    })
-                    .response
-                    .on_hover_text("What a bare scroll does. Ctrl+scroll and pinch always zoom.");
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(
-                        RichText::new(format!("{:.0}%", self.editor.state.zoom * 100.0))
-                            .monospace()
-                            .weak(),
-                    );
-                    ui.label(RichText::new("zoom").weak());
-                });
-            });
+            ui.horizontal(|ui| self.show_toolbar(ui));
             ui.add_space(3.0);
         });
-    }
-
-    fn side_panel(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::bottom("nodez-status").show(ui, |ui| self.show_status(ui));
         egui::Panel::left("nodez-library")
             .default_size(260.0)
             .min_size(200.0)
@@ -592,18 +558,266 @@ impl<N: NodeData> EditorApp<N> {
                 let half = ui.available_height() * 0.5;
                 egui::ScrollArea::vertical()
                     .id_salt("nodez-palette")
-                    .max_height(if self.show_inspector { half } else { f32::INFINITY })
-                    .show(ui, |ui| self.palette(ui));
+                    .max_height(if self.inspector_open { half } else { f32::INFINITY })
+                    .show(ui, |ui| self.show_palette(ui));
 
-                if self.show_inspector {
+                if self.inspector_open {
                     ui.separator();
-                    self.inspector(ui);
+                    self.show_inspector(ui);
                 }
+            });
+        if self.preview.is_some() {
+            egui::Panel::right("nodez-preview")
+                .default_size(400.0)
+                .min_size(280.0)
+                .max_size(720.0)
+                .show(ui, |ui| self.show_preview(ui));
+        }
+        egui::CentralPanel::no_frame().show(ui, |ui| self.show_canvas(ui));
+    }
+
+    /// The node editor itself, filling `ui`, and everything that follows from
+    /// an edit in it: the preview regenerated, wires rerouted, groups made and
+    /// opened, and the question asked before unsaved changes are lost.
+    ///
+    /// Every layout needs this one.
+    pub fn show_canvas(&mut self, ui: &mut egui::Ui) {
+        // A graph that arrives whole -- the one the app was built with, or one
+        // just loaded -- has never been past the router. Route it before it is
+        // drawn, rather than leaving it straight until the first edit.
+        if self.route_next {
+            self.route_next = false;
+            self.apply_routing();
+        }
+        if self.frame_next {
+            self.frame_next = false;
+            let rect = ui.available_rect_before_wrap();
+            self.editor.fit_to_graph(rect, &self.graph, &self.library);
+        }
+        let response = self.editor.show(ui, &self.library, &mut self.graph);
+        if response.changed
+            && let Some(preview) = &self.preview
+        {
+            self.generated = preview(&self.graph, &self.library);
+        }
+        // Keep the wires routed as the graph changes. Both of these land
+        // once an edit or a drag is finished, not while one is in flight,
+        // so this costs nothing per frame.
+        let moved = response
+            .actions
+            .iter()
+            .any(|a| matches!(a, EditorAction::NodesMoved(_)));
+        self.modified |= response.changed || moved;
+        if self.route_wires && (response.changed || moved) {
+            self.apply_routing();
+        }
+        for action in response.actions {
+            match action {
+                EditorAction::ConnectionRejected(e) => self.status.error(e.to_string()),
+                EditorAction::GroupSelection(nodes) => self.group_selection(&nodes),
+                EditorAction::EnterGroup(id) => self.enter_group(id),
+                EditorAction::LeaveGroup => self.leave_group(),
+                EditorAction::NodeMenu { node, item } => self.run_node_menu(&item, node),
+                _ => {}
+            }
+        }
+        self.confirm_discard(ui);
+    }
+
+    /// The toolbar's buttons, laid out in whatever direction `ui` is — the
+    /// default layout puts them in a row. Anything added with
+    /// [`EditorApp::toolbar`] comes last.
+    pub fn show_toolbar(&mut self, ui: &mut egui::Ui) {
+        if ui.button("New").clicked() {
+            self.unless_unsaved(Discard::New);
+        }
+        ui.separator();
+
+        let undo = ui.add_enabled(self.editor.state.can_undo(), egui::Button::new("Undo"));
+        if undo.on_hover_text("Ctrl+Z").clicked() && self.editor.undo(&mut self.graph) {
+            self.after_edit();
+        }
+        let redo = ui.add_enabled(self.editor.state.can_redo(), egui::Button::new("Redo"));
+        if redo.on_hover_text("Ctrl+Shift+Z").clicked() && self.editor.redo(&mut self.graph) {
+            self.after_edit();
+        }
+        ui.separator();
+
+        if self.persistence.is_some() {
+            if ui.button("Load").clicked() {
+                self.unless_unsaved(Discard::Load);
+            }
+            if ui.button("Save").clicked() {
+                self.save();
+            }
+            ui.add(
+                egui::TextEdit::singleline(&mut self.path)
+                    .desired_width(240.0)
+                    .hint_text("graph.json"),
+            );
+            ui.separator();
+        }
+
+        if ui.button("Auto layout").clicked() {
+            self.auto_layout();
+        }
+        if ui.button("Frame all").clicked() {
+            self.frame_next = true;
+        }
+        ui.checkbox(&mut self.editor.style.show_grid, "Grid");
+        if ui
+            .checkbox(&mut self.route_wires, "Route")
+            .on_hover_text("Steer wires around the nodes in their way")
+            .changed()
+        {
+            self.apply_routing();
+        }
+        // Only the default layout has an inspector to hide; a layout of your
+        // own shows it or not.
+        if self.layout.is_none() && !self.laying_out {
+            ui.checkbox(&mut self.inspector_open, "Inspector");
+        }
+        // Where you are, when you are inside a group. Clicking a step goes
+        // back out to it.
+        if !self.inside.is_empty() {
+            ui.separator();
+            let mut back_to = None;
+            if ui.link(&self.path).clicked() {
+                back_to = Some(0);
+            }
+            let names: Vec<String> = self
+                .inside
+                .iter()
+                .skip(1)
+                .map(|open| self.library.expect(open.template).label.clone())
+                .chain(std::iter::once(
+                    self.inside
+                        .last()
+                        .map(|open| self.library.expect(open.template).label.clone())
+                        .unwrap_or_default(),
+                ))
+                .collect();
+            for (depth, name) in names.iter().enumerate() {
+                ui.label(RichText::new("\u{203A}").weak());
+                if depth + 1 == names.len() {
+                    ui.label(RichText::new(name).strong());
+                } else if ui.link(name).clicked() {
+                    back_to = Some(depth + 1);
+                }
+            }
+            if let Some(depth) = back_to {
+                while self.inside.len() > depth {
+                    self.leave_group();
+                }
+            }
+        }
+        ui.checkbox(&mut self.editor.style.show_missing_inputs, "Unfilled")
+            .on_hover_text("Mark inputs that have to be wired and are not");
+
+        egui::ComboBox::from_id_salt("nodez-scroll-mode")
+            .width(96.0)
+            .selected_text(match self.editor.scroll_mode {
+                ScrollMode::Auto => "Scroll: auto",
+                ScrollMode::Pan => "Scroll: pan",
+                ScrollMode::Zoom => "Scroll: zoom",
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(
+                    &mut self.editor.scroll_mode,
+                    ScrollMode::Auto,
+                    "Auto (pan on trackpad)",
+                );
+                ui.selectable_value(&mut self.editor.scroll_mode, ScrollMode::Pan, "Pan");
+                ui.selectable_value(&mut self.editor.scroll_mode, ScrollMode::Zoom, "Zoom");
+            })
+            .response
+            .on_hover_text("What a bare scroll does. Ctrl+scroll and pinch always zoom.");
+
+        if let Some(mut extra) = self.toolbar.take() {
+            ui.separator();
+            extra(ui, self);
+            self.toolbar = Some(extra);
+        }
+    }
+
+    /// The last message, the zoom, and a reminder of the keys.
+    pub fn show_status(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            let color = if self.status.error {
+                Color32::from_rgb(0xE8, 0x7C, 0x6A)
+            } else {
+                Color32::from_gray(0xA0)
+            };
+            ui.label(RichText::new(&self.status.message).color(color).small());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(
+                    RichText::new(format!("{:.0}%", self.editor.state.zoom * 100.0))
+                        .monospace()
+                        .small()
+                        .weak(),
+                );
+                ui.separator();
+                ui.label(
+                    RichText::new(
+                        "LMB select / box  \u{2022}  MMB or 2-finger pan  \
+                         \u{2022}  wheel / ctrl+scroll zoom  \u{2022}  Shift+A add  \
+                         \u{2022}  G grab  \u{2022}  X delete  \u{2022}  H collapse  \
+                         \u{2022}  M mute  \u{2022}  Ctrl+drag cut  \
+                         \u{2022}  Ctrl+G group  \u{2022}  double-click to open",
+                    )
+                    .small()
+                    .weak(),
+                );
+            });
+        });
+    }
+
+    /// What the preview callback generated, with Copy and Write buttons.
+    /// Draws nothing useful without [`EditorApp::preview`].
+    pub fn show_preview(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.heading("Generated");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Copy").clicked() {
+                    ui.ctx().copy_text(self.generated.text.clone());
+                    self.status.info("Copied to the clipboard.");
+                }
+                if self.persistence.is_some() && ui.button("Write").clicked() {
+                    self.write_preview();
+                }
+            });
+        });
+
+        for problem in &self.generated.problems {
+            ui.colored_label(
+                Color32::from_rgb(0xE0, 0xA0, 0x40),
+                format!("\u{26A0} {problem}"),
+            );
+        }
+
+        ui.add_space(4.0);
+        egui::ScrollArea::both()
+            .id_salt("nodez-preview-scroll")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(&self.generated.text)
+                            .monospace()
+                            .color(Color32::from_rgb(0xCE, 0xD6, 0xC8)),
+                    )
+                    .selectable(true)
+                    .wrap_mode(egui::TextWrapMode::Extend),
+                );
             });
     }
 
-    fn palette(&mut self, ui: &mut egui::Ui) {
+    /// A button for every node kind in the library, by category. Clicking
+    /// one adds that node in the first free space near the middle of the view.
+    pub fn show_palette(&mut self, ui: &mut egui::Ui) {
         let dark = self.editor.style.background.r() < 128;
+        let mut chosen = None;
         let categories: Vec<String> = self.library.categories().map(str::to_owned).collect();
         for category in categories {
             let tint = self
@@ -624,15 +838,50 @@ impl<N: NodeData> EditorApp<N> {
                             button.on_hover_text(&template.description)
                         };
                         if button.clicked() {
-                            self.pending_add = Some(id);
+                            chosen = Some(id);
                         }
                     }
                 });
         }
+        if let Some(template) = chosen {
+            self.add_from_palette(template);
+        }
+    }
+
+    /// Add a node where there is room for it. There is no cursor to place it
+    /// under, so it goes in the first open space near the middle of the view
+    /// rather than always the same spot.
+    fn add_from_palette(&mut self, template: TemplateId) {
+        self.editor.checkpoint(&self.graph);
+        let id = self
+            .graph
+            .add_node(&self.library, template, self.editor.view_center());
+        if let Some((preferred, size)) = self.graph.node(id).map(|node| {
+            (
+                node.position,
+                node_size(&self.graph, &self.library, node, &self.editor.style),
+            )
+        }) {
+            let free = free_position(
+                &self.graph,
+                &self.library,
+                &self.editor.style,
+                size,
+                preferred - size / 2.0,
+                Some(id),
+            );
+            if let Some(node) = self.graph.node_mut(id) {
+                node.position = free;
+            }
+        }
+        self.editor.state.select_only(id);
+        self.regenerate();
+        self.modified = true;
+        self.status.info("Added a node.");
     }
 
     /// The traversal API, shown live for whichever node is active.
-    fn inspector(&mut self, ui: &mut egui::Ui) {
+    pub fn show_inspector(&mut self, ui: &mut egui::Ui) {
         ui.add_space(4.0);
         ui.heading("Graph");
         ui.label(format!(
@@ -753,77 +1002,6 @@ impl<N: NodeData> EditorApp<N> {
         }
     }
 
-    fn preview_panel(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::right("nodez-preview")
-            .default_size(400.0)
-            .min_size(280.0)
-            .max_size(720.0)
-            .show(ui, |ui| {
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.heading("Generated");
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Copy").clicked() {
-                            ui.ctx().copy_text(self.generated.text.clone());
-                            self.status.info("Copied to the clipboard.");
-                        }
-                        if self.persistence.is_some() && ui.button("Write").clicked() {
-                            self.write_preview();
-                        }
-                    });
-                });
-
-                for problem in &self.generated.problems {
-                    ui.colored_label(
-                        Color32::from_rgb(0xE0, 0xA0, 0x40),
-                        format!("\u{26A0} {problem}"),
-                    );
-                }
-
-                ui.add_space(4.0);
-                egui::ScrollArea::both()
-                    .id_salt("nodez-preview-scroll")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(&self.generated.text)
-                                    .monospace()
-                                    .color(Color32::from_rgb(0xCE, 0xD6, 0xC8)),
-                            )
-                            .selectable(true)
-                            .wrap_mode(egui::TextWrapMode::Extend),
-                        );
-                    });
-            });
-    }
-
-    fn status_bar(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::bottom("nodez-status").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let color = if self.status.error {
-                    Color32::from_rgb(0xE8, 0x7C, 0x6A)
-                } else {
-                    Color32::from_gray(0xA0)
-                };
-                ui.label(RichText::new(&self.status.message).color(color).small());
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(
-                        RichText::new(
-                            "LMB select / box  \u{2022}  MMB or 2-finger pan  \
-                             \u{2022}  wheel / ctrl+scroll zoom  \u{2022}  Shift+A add  \
-                             \u{2022}  G grab  \u{2022}  X delete  \u{2022}  H collapse  \
-                             \u{2022}  M mute  \u{2022}  Ctrl+drag cut  \
-                             \u{2022}  Ctrl+G group  \u{2022}  double-click to open",
-                        )
-                        .small()
-                        .weak(),
-                    );
-                });
-            });
-        });
-    }
-
     // ------------------------------------------------------------- groups
 
     /// Read every group kept beside the app into the library.
@@ -897,6 +1075,7 @@ impl<N: NodeData> EditorApp<N> {
         match crate::group::make_group(&mut flat, &mut self.library, &chosen, &id, &label, "Group")
         {
             Ok(made) => {
+                self.editor.checkpoint(&self.graph);
                 self.graph = flat.convert::<N>(&self.library);
                 self.editor.state.clear_selection();
                 self.editor.state.selection.insert(made);
@@ -908,6 +1087,14 @@ impl<N: NodeData> EditorApp<N> {
                 self.after_edit();
             }
             Err(e) => self.status.error(e.to_string()),
+        }
+    }
+
+    /// Back out of every open group, putting each one's edits into the
+    /// library on the way.
+    fn leave_all_groups(&mut self) {
+        while !self.inside.is_empty() {
+            self.leave_group();
         }
     }
 
@@ -924,7 +1111,17 @@ impl<N: NodeData> EditorApp<N> {
         let name = self.library.expect(template).label.clone();
         let opened = inside.convert::<N>(&self.library);
         let outer = std::mem::replace(&mut self.graph, opened);
-        self.inside.push(Opened { template, outer });
+        let view = View {
+            pan: self.editor.state.pan,
+            zoom: self.editor.state.zoom,
+        };
+        self.inside.push(Opened {
+            template,
+            outer,
+            view,
+        });
+        // Undo walks back through one graph's edits, and this is another graph.
+        self.editor.clear_history();
         self.editor.state.clear_selection();
         self.frame_next = true;
         self.route_next = true;
@@ -933,7 +1130,12 @@ impl<N: NodeData> EditorApp<N> {
 
     /// Put the group being edited back, and return to what it was opened from.
     fn leave_group(&mut self) {
-        let Some(Opened { template, outer }) = self.inside.pop() else {
+        let Some(Opened {
+            template,
+            outer,
+            view,
+        }) = self.inside.pop()
+        else {
             return;
         };
         let (id, label, category) = {
@@ -946,11 +1148,13 @@ impl<N: NodeData> EditorApp<N> {
         // Registering it again is what re-reads the interface off the pads.
         // A socket that went takes its wires with it, which is what `validate`
         // is for -- and what every other instance of the group needs too.
-        if let Err(e) = self
+        match self
             .library
             .register_group(&id, &label, &category, edited)
         {
-            self.status.error(format!("{label}: {e}"));
+            // And written back, or the edits last only as long as the window.
+            Ok(template) => self.keep_group(template),
+            Err(e) => self.status.error(format!("{label}: {e}")),
         }
         let repairs = self.graph.validate(&self.library);
         if !repairs.is_clean() {
@@ -959,8 +1163,10 @@ impl<N: NodeData> EditorApp<N> {
                 repairs.removed_connections
             ));
         }
+        self.editor.clear_history();
         self.editor.state.clear_selection();
-        self.frame_next = true;
+        self.editor.state.pan = view.pan;
+        self.editor.state.zoom = view.zoom;
         self.after_edit();
     }
 
@@ -968,6 +1174,7 @@ impl<N: NodeData> EditorApp<N> {
     /// editor: the preview is stale and the wires are bent around nodes that
     /// have gone.
     fn after_edit(&mut self) {
+        self.modified = true;
         if let Some(preview) = &self.preview {
             self.generated = preview(&self.graph, &self.library);
         }
@@ -999,6 +1206,7 @@ impl<N: NodeData> EditorApp<N> {
     }
 
     fn auto_layout(&mut self) {
+        self.editor.checkpoint(&self.graph);
         let library = &self.library;
         let style = &self.editor.style;
         let result = crate::layout::layered(
@@ -1017,6 +1225,7 @@ impl<N: NodeData> EditorApp<N> {
         }
         match result {
             Ok(()) => {
+                self.modified = true;
                 self.frame_next = true;
                 self.status.info("Laid out by dependency depth.");
             }
@@ -1028,6 +1237,12 @@ impl<N: NodeData> EditorApp<N> {
         if self.persistence.is_none() {
             return;
         }
+        // The file is the whole graph, not whichever group is open in it.
+        self.leave_all_groups();
+        self.graph.set_view(Some(View {
+            pan: self.editor.state.pan,
+            zoom: self.editor.state.zoom,
+        }));
         // Names for the template ids on the way out, so the file can be read
         // back by a library with a different set of templates in it.
         self.graph.name_templates(&self.library);
@@ -1037,8 +1252,99 @@ impl<N: NodeData> EditorApp<N> {
         let written = (persistence.save)(&self.graph)
             .and_then(|text| files::write(&self.path, &text));
         match written {
-            Ok(path) => self.status.info(format!("Saved {path}")),
+            Ok(path) => {
+                self.modified = false;
+                self.status.info(format!("Saved {path}"));
+            }
             Err(e) => self.status.error(format!("Save failed: {e}")),
+        }
+    }
+
+    /// Start a new, empty graph.
+    fn new_graph(&mut self) {
+        self.editor.checkpoint(&self.graph);
+        self.graph.clear();
+        self.editor.state.clear_selection();
+        self.regenerate();
+        self.modified = false;
+        self.frame_next = true;
+        self.status.info("New graph.");
+    }
+
+    /// Do `what` now if nothing unsaved would be lost, or ask first.
+    fn unless_unsaved(&mut self, what: Discard) {
+        if self.modified {
+            self.confirm = Some(what);
+        } else {
+            self.go_ahead(what);
+        }
+    }
+
+    fn go_ahead(&mut self, what: Discard) {
+        // A new or loaded graph replaces the document, not the group open in
+        // it -- which would otherwise become that group's insides on the way
+        // back out.
+        if !matches!(what, Discard::Close) {
+            self.leave_all_groups();
+        }
+        match what {
+            Discard::New => self.new_graph(),
+            Discard::Load => self.load(),
+            Discard::Close => self.may_close = true,
+        }
+    }
+
+    /// Ask before throwing away unsaved changes, and catch the window being
+    /// closed with some.
+    fn confirm_discard(&mut self, ui: &egui::Ui) {
+        let ctx = ui.ctx().clone();
+        if ctx.input(|i| i.viewport().close_requested()) && !self.may_close && self.modified {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.confirm = Some(Discard::Close);
+        }
+        let Some(what) = self.confirm else {
+            return;
+        };
+        let doing = match what {
+            Discard::New => "Starting a new graph".to_owned(),
+            Discard::Load => format!("Loading {}", self.path),
+            Discard::Close => "Closing the window".to_owned(),
+        };
+        let mut answer = None;
+        let modal = egui::Modal::new(egui::Id::new("nodez-discard")).show(&ctx, |ui| {
+            ui.set_width(340.0);
+            ui.heading("Unsaved changes");
+            ui.add_space(4.0);
+            ui.label(format!("{doing} will lose the changes made since the graph was last saved."));
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if self.persistence.is_some() && ui.button("Save first").clicked() {
+                    answer = Some(true);
+                }
+                if ui.button("Discard changes").clicked() {
+                    answer = Some(false);
+                }
+                if ui.button("Cancel").clicked() {
+                    self.confirm = None;
+                }
+            });
+        });
+        if modal.should_close() {
+            self.confirm = None;
+        }
+        let Some(save_first) = answer else {
+            return;
+        };
+        self.confirm = None;
+        if save_first {
+            self.save();
+            if self.modified {
+                return; // the save failed, and says so in the status bar
+            }
+        }
+        self.go_ahead(what);
+        if matches!(what, Discard::Close) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
 
@@ -1051,9 +1357,11 @@ impl<N: NodeData> EditorApp<N> {
             Ok(mut graph) => {
                 let repairs = graph.validate(&self.library);
                 self.graph = graph;
+                self.editor.clear_history();
                 self.editor.state.clear_selection();
+                self.modified = false;
                 self.regenerate();
-                self.frame_next = true;
+                self.open_view();
                 self.route_next = true;
                 if repairs.is_clean() {
                     self.status.info(format!("Loaded {}", self.path));

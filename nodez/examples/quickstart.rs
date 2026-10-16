@@ -3,6 +3,7 @@
 //!     cargo run -p nodez --features derive,app --example quickstart
 
 use nodez::app::{EditorApp, Preview};
+use nodez::{eframe, egui};
 use nodez::{
     Evaluate, Fold, Graph, Multi, NodeError, NodeLibrary, NodeType, Payload, Rules, SocketType,
 };

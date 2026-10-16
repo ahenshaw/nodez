@@ -3,7 +3,7 @@
 //! Also a worked example of building a graph in code: add nodes by template id,
 //! set their inline values, wire them up, then let `nodez::layered` place them.
 
-use egui::pos2;
+use nodez::egui::pos2;
 use nodez::{EditorStyle, Graph, LayoutOptions, NodeId, NodeLibrary, Value, node_size};
 
 pub fn build(library: &NodeLibrary, style: &EditorStyle) -> Graph {
