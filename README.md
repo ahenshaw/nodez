@@ -22,7 +22,7 @@ well-typed. You describe your nodes as Rust structs and the rest is generated.
 
 ```toml
 [dependencies]
-nodez = { version = "0.6", features = ["derive", "app"] }
+nodez = { version = "0.7", features = ["derive", "app"] }
 ```
 
 There is no need to add `egui` or `eframe` yourself: use `nodez::egui` and
