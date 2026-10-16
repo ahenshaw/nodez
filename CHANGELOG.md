@@ -8,6 +8,12 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- A field whose type is not a `SocketType`, such as `Vec<String>`, now gets
+  a compile error that says what to write instead: `Multi<T>` for many
+  links, or a `#[derive(SocketType)]` newtype for one link carrying a list.
+
 ## [0.7.0] — 2026-10-15
 
 Undo covers everything now, not just moves: a value typed in, a wire, a

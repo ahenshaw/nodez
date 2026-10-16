@@ -49,6 +49,13 @@ pub type Payload = Box<dyn Any>;
 /// The `widget`/`to_value`/`from_value` defaults make a type link-only. A type
 /// that overrides them can also be typed in by hand, and the editor draws the
 /// widget on the socket when nothing is connected.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` cannot travel along a wire",
+    label = "sockets and params must be a `SocketType`",
+    note = "for many links, each carrying a `T`, write `Multi<T>`",
+    note = "for one link carrying a collection, declare a newtype: \
+            `#[derive(Clone, SocketType)] struct Names(Vec<String>);`"
+)]
 pub trait SocketType: Clone + 'static {
     /// The name the type is registered under. Must be unique in a library.
     const NAME: &'static str;
