@@ -8,6 +8,12 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-10-16
+
+A list field no longer has to be rewritten to fit the derive: an `#[input]`
+of `Vec<T>` takes many links, as `Multi<T>` does. And the derive's errors say
+what to write instead, rather than that a trait is not implemented.
+
 ### Added
 
 - An `#[input]` of plain `Vec<T>` is a fan-in: many links, each carrying a
@@ -382,7 +388,8 @@ First release: a Blender-style node editor widget for egui, with a typed,
 traversable graph model, `#[derive(NodeType)]` for describing nodes as Rust
 types, and a ready-made editor window behind the `app` feature.
 
-[Unreleased]: https://github.com/ahenshaw/nodez/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/ahenshaw/nodez/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/ahenshaw/nodez/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/ahenshaw/nodez/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/ahenshaw/nodez/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/ahenshaw/nodez/compare/v0.5.0...v0.6.0
