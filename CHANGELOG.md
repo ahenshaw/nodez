@@ -8,8 +8,15 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-10-19
+
 A list no longer needs a newtype to travel along a wire: `Vec<T>` is a socket
-type whenever `T` is.
+type whenever `T` is, and `#[input(one)]` takes one link carrying one.
+
+A minor bump, because two things can break a build: `SocketType::NAME` is
+gone in favour of `SocketType::name()`, and `NodeError::WrongType`'s
+`expected` is a `String`. Neither touches code that only uses the derives,
+and a graph saved by an older version still loads.
 
 ### Added
 
@@ -410,7 +417,8 @@ First release: a Blender-style node editor widget for egui, with a typed,
 traversable graph model, `#[derive(NodeType)]` for describing nodes as Rust
 types, and a ready-made editor window behind the `app` feature.
 
-[Unreleased]: https://github.com/ahenshaw/nodez/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/ahenshaw/nodez/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/ahenshaw/nodez/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/ahenshaw/nodez/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/ahenshaw/nodez/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/ahenshaw/nodez/compare/v0.6.0...v0.6.1
