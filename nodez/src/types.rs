@@ -104,6 +104,7 @@ impl DataTypeBuilder {
     }
 
     /// The type as built so far, for deriving one type from another.
+    #[cfg(feature = "derive")]
     pub(crate) fn peek(&self) -> &DataType {
         &self.ty
     }
