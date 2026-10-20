@@ -75,3 +75,85 @@ fn vec_input_is_a_fan_in() {
         .unwrap();
     assert_eq!(*counted.downcast::<usize>().unwrap(), 2);
 }
+
+/// A list is a socket type, so a node can emit one without a newtype.
+#[derive(Debug, NodeType)]
+#[node(output = Vec<String>)]
+struct Split {
+    #[input]
+    text: String,
+}
+
+/// `one` makes the outer `Vec` the payload: one link carrying a list.
+#[derive(Debug, NodeType)]
+#[node(produces = String)]
+struct Last {
+    #[input(one)]
+    words: Vec<String>,
+}
+
+/// The outer `Vec` is still the fan-in, so each link carries a whole list.
+#[derive(Debug, NodeType)]
+#[node(produces = Vec<usize>)]
+struct Lengths {
+    #[input]
+    lists: Vec<Vec<String>>,
+}
+
+impl Evaluate<Text> for Split {
+    fn evaluate(&self) -> Result<Vec<String>, NodeError> {
+        Ok(self.text.split(' ').map(str::to_owned).collect())
+    }
+}
+impl Evaluate<Text> for Last {
+    fn evaluate(&self) -> Result<String, NodeError> {
+        Ok(self.words.last().cloned().unwrap_or_default())
+    }
+}
+impl Evaluate<Text> for Lengths {
+    fn evaluate(&self) -> Result<Vec<usize>, NodeError> {
+        Ok(self.lists.iter().map(Vec::len).collect())
+    }
+}
+
+#[test]
+fn a_list_travels_along_one_wire() {
+    let mut library = NodeLibrary::new();
+    let mut rules = Rules::<Text>::new();
+    rules.register_all::<(Word, Join, Split, Last, Lengths)>(&mut library);
+
+    let mut graph = Graph::new();
+    let word = library.id("word").unwrap();
+    let split = library.id("split").unwrap();
+    let short = graph.add_node(&library, word, pos2(0.0, 0.0));
+    let long = graph.add_node(&library, word, pos2(0.0, 80.0));
+    graph.node_mut(short).unwrap().set_input_value("value", "a b");
+    graph.node_mut(long).unwrap().set_input_value("value", "c d e");
+    let split_short = graph.add_node(&library, split, pos2(200.0, 0.0));
+    let split_long = graph.add_node(&library, split, pos2(200.0, 80.0));
+    graph.connect(&library, (short, "out"), (split_short, "text")).unwrap();
+    graph.connect(&library, (long, "out"), (split_long, "text")).unwrap();
+
+    let last = graph.add_node(&library, library.id("last").unwrap(), pos2(400.0, 0.0));
+    graph.connect(&library, (split_long, "out"), (last, "words")).unwrap();
+    // `one` is a single-link socket, not a fan-in.
+    let spec = &library.get(library.id("last").unwrap()).unwrap().inputs[0];
+    assert!(!spec.multi);
+    let value = graph
+        .evaluate::<Payload, NodeError>(&library, last, |ctx| rules.run(&ctx))
+        .unwrap();
+    assert_eq!(*value.downcast::<String>().unwrap(), "e");
+
+    let lengths = graph.add_node(&library, library.id("lengths").unwrap(), pos2(400.0, 80.0));
+    graph.connect(&library, (split_short, "out"), (lengths, "lists")).unwrap();
+    graph.connect(&library, (split_long, "out"), (lengths, "lists")).unwrap();
+    let value = graph
+        .evaluate::<Payload, NodeError>(&library, lengths, |ctx| rules.run(&ctx))
+        .unwrap();
+    assert_eq!(*value.downcast::<Vec<usize>>().unwrap(), vec![2, 3]);
+
+    // A list of Text is not Text, in either direction.
+    let join = graph.add_node(&library, library.id("join").unwrap(), pos2(400.0, 160.0));
+    assert!(graph.connect(&library, (split_short, "out"), (join, "parts")).is_err());
+    assert!(graph.connect(&library, (short, "out"), (last, "words")).is_err());
+}

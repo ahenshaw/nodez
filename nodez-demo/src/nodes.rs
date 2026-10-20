@@ -24,12 +24,6 @@ use nodez::{Evaluate, Fold, NodeError, NodeType, SocketType, Value};
 #[socket(description = "A container image reference.")]
 pub struct ImageRef(String);
 
-/// One link may carry several entries, which is why this is a type of its own:
-/// a bare `Vec<String>` input would mean many links instead.
-#[derive(Clone, Debug, SocketType)]
-#[socket(shape = "diamond", description = "Environment entries.")]
-pub struct EnvList(Vec<String>);
-
 /// The original demo carried env files down the same socket as env entries and
 /// told them apart with a match. A type of their own does that in the schema.
 #[derive(Clone, Debug, SocketType)]
@@ -197,7 +191,7 @@ pub struct Image {
     category = "Build",
     description = "One KEY=value pair.",
     keywords = "env, variable",
-    output = EnvList
+    output = Vec<String>
 )]
 pub struct EnvVar {
     #[input(default = "KEY")]
@@ -310,8 +304,9 @@ pub struct Service {
     command: String,
     #[input(default = 1, min = 1, max = 64)]
     replicas: i64,
+    /// Many links, each carrying a list of entries.
     #[input]
-    environment: Vec<EnvList>,
+    environment: Vec<Vec<String>>,
     #[input(label = "Env Files")]
     env_file: Vec<EnvFileRef>,
     #[input]
@@ -417,11 +412,11 @@ impl Evaluate<Config> for Image {
 }
 
 impl Evaluate<Config> for EnvVar {
-    fn evaluate(&self) -> Result<EnvList, NodeError> {
+    fn evaluate(&self) -> Result<Vec<String>, NodeError> {
         if self.key.is_empty() {
             return Err(NodeError::custom("Environment Variable needs a key."));
         }
-        Ok(EnvList(vec![format!("{}={}", self.key, self.value)]))
+        Ok(vec![format!("{}={}", self.key, self.value)])
     }
 }
 
@@ -508,11 +503,8 @@ impl Evaluate<Config> for Service {
                 Value::map().set("replicas", self.replicas),
             )
             .set_list("ports", self.ports.iter().map(|port| port.0.clone()))
-            // `Vec<EnvList>` is a fan-in of lists: flatten across links.
-            .set_list(
-                "environment",
-                self.environment.iter().flat_map(|list| list.0.iter().cloned()),
-            )
+            // A fan-in of lists: flatten across links.
+            .set_list("environment", self.environment.iter().flatten().cloned())
             .set_list("env_file", self.env_file.iter().map(|file| file.0.clone()))
             .set_list("volumes", self.volumes.iter().map(|mount| mount.0.clone()))
             .set_list(

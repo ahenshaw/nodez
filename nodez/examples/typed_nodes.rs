@@ -38,12 +38,6 @@ struct ImageRef(String);
 #[socket(shape = "diamond", description = "A published port.")]
 struct PortMap(String);
 
-/// One link carrying a list. `Vec<T>` on an input already means many links,
-/// so a list that travels as one value is a type of its own.
-#[derive(Clone, Debug, SocketType)]
-#[socket(shape = "diamond", description = "Environment entries.")]
-struct EnvList(Vec<String>);
-
 #[derive(Clone, Debug, SocketType)]
 #[socket(description = "A container health probe.")]
 struct Health(BTreeMap<String, String>);
@@ -104,10 +98,10 @@ struct Port {
     protocol: Protocol,
 }
 
-/// One entry. Wired into `Vec<EnvList>` alongside the node below, this is a
-/// fan-in; on its own it is a link carrying a one-element list.
+/// One entry, as a one-element list, so it wires into the same fan-in as the
+/// node below.
 #[derive(Debug, NodeType)]
-#[node(label = "Environment Variable", output = EnvList)]
+#[node(label = "Environment Variable", output = Vec<String>)]
 struct EnvVar {
     #[input(default = "KEY")]
     key: String,
@@ -115,9 +109,9 @@ struct EnvVar {
     value: String,
 }
 
-/// Several entries from one link, which is why `EnvList` is a newtype.
+/// Several entries from one link: a `Vec<T>` is a socket type of its own.
 #[derive(Debug, NodeType)]
-#[node(label = "Environment File", output = EnvList)]
+#[node(label = "Environment File", output = Vec<String>)]
 struct EnvFile {
     #[input(default = ".env")]
     path: String,
@@ -148,7 +142,7 @@ struct Service {
     replicas: i64,
     /// Many links, each carrying a *list*.
     #[input]
-    environment: Vec<EnvList>,
+    environment: Vec<Vec<String>>,
     #[input]
     ports: Vec<PortMap>,
     /// Optional: `None` when nothing is wired in.
@@ -188,22 +182,22 @@ impl Evaluate<Config> for Port {
 }
 
 impl Evaluate<Config> for EnvVar {
-    fn evaluate(&self) -> Result<EnvList, NodeError> {
+    fn evaluate(&self) -> Result<Vec<String>, NodeError> {
         if self.key.is_empty() {
             return Err(NodeError::custom("Environment Variable needs a key."));
         }
-        Ok(EnvList(vec![format!("{}={}", self.key, self.value)]))
+        Ok(vec![format!("{}={}", self.key, self.value)])
     }
 }
 
 impl Evaluate<Config> for EnvFile {
-    fn evaluate(&self) -> Result<EnvList, NodeError> {
+    fn evaluate(&self) -> Result<Vec<String>, NodeError> {
         // Stand-in for parsing the file: one link, several entries.
-        Ok(EnvList(vec![
+        Ok(vec![
             format!("# from {}", self.path),
             "LOG_LEVEL=info".to_owned(),
             "TZ=UTC".to_owned(),
-        ]))
+        ])
     }
 }
 
@@ -223,11 +217,8 @@ impl Evaluate<Config> for Service {
                 Value::map().set("replicas", self.replicas),
             )
             .set_list("ports", self.ports.iter().map(|p| p.0.clone()))
-            // `Vec<EnvList>` is a fan-in of lists: flatten across links.
-            .set_list(
-                "environment",
-                self.environment.iter().flat_map(|list| list.0.iter().cloned()),
-            )
+            // `Vec<Vec<String>>` is a fan-in of lists: flatten across links.
+            .set_list("environment", self.environment.iter().flatten().cloned())
             .set_some(
                 "healthcheck",
                 self.healthcheck.as_ref().map(|health| {

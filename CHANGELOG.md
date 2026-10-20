@@ -8,6 +8,28 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+A list no longer needs a newtype to travel along a wire: `Vec<T>` is a socket
+type whenever `T` is.
+
+### Added
+
+- `Vec<T>` is a `SocketType` for every socket type `T`, registered as
+  `List<…>` in the element's color with a square socket, link-only. A node can
+  output `Vec<String>`, and `#[input] x: Vec<Vec<String>>` is a fan-in of lists.
+- `#[input(one)] x: Vec<T>` is one link carrying a list. Without `one`, the
+  outer `Vec` on an input still means many links.
+
+### Changed
+
+- **Breaking:** `SocketType::NAME` is gone. The name comes from
+  `data_type()`, and `SocketType::name()` reads it back; a list's name is
+  built at runtime, which a `const` cannot be. Only a hand-written
+  `SocketType` impl is affected — the derive writes nothing for it.
+- **Breaking:** `NodeError::WrongType::expected` is a `String`, for the same
+  reason.
+- The demo and `typed_nodes` example drop their `EnvList` newtype for
+  `Vec<String>`.
+
 ## [0.7.1] — 2026-10-16
 
 A list field no longer has to be rewritten to fit the derive: an `#[input]`

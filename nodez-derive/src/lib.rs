@@ -110,8 +110,6 @@ fn socket_type_impl(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
     Ok(quote! {
         impl ::nodez::typed::SocketType for #ident {
-            const NAME: &'static str = #name;
-
             fn data_type() -> ::nodez::DataTypeBuilder {
                 ::nodez::DataTypeBuilder::new(#name, #color)
                 .shape(::nodez::SocketShape::#shape)
@@ -435,7 +433,7 @@ fn node_impl(input: &DeriveInput) -> syn::Result<TokenStream2> {
                         "input `{}` has a default, but its type `{}` has no inline \
                          editor, so nothing can ever show or use that value",
                         #name,
-                        <#payload as ::nodez::typed::SocketType>::NAME,
+                        <#payload as ::nodez::typed::SocketType>::name(),
                     );
                 } } else { quote!() };
                 let optional_needs_link_only = if matches!(arity, Arity::Optional) { quote! {
@@ -444,8 +442,8 @@ fn node_impl(input: &DeriveInput) -> syn::Result<TokenStream2> {
                         "input `{}` is Option<{}>, but `{}` is editable, so the socket \
                          always has a value and the Option can never be None",
                         #name,
-                        <#payload as ::nodez::typed::SocketType>::NAME,
-                        <#payload as ::nodez::typed::SocketType>::NAME,
+                        <#payload as ::nodez::typed::SocketType>::name(),
+                        <#payload as ::nodez::typed::SocketType>::name(),
                     );
                 } } else { quote!() };
                 let multi = matches!(arity, Arity::Multi | Arity::Vec)
@@ -511,7 +509,7 @@ fn node_impl(input: &DeriveInput) -> syn::Result<TokenStream2> {
                     let ty = ::nodez::typed::__private::register_type::<#ty>(types);
                     template = template.output(
                         ::nodez::SocketSpec::new(#socket, ty)
-                            .label(<#ty as ::nodez::typed::SocketType>::NAME),
+                            .label(<#ty as ::nodez::typed::SocketType>::name()),
                     );
                 }
             }
@@ -566,8 +564,9 @@ enum Arity {
     Required,
     Optional,
     Multi,
-    /// A fan-in read as a plain `Vec`. `Vec<T>` is never a socket type, so
-    /// on an input it can only mean many links.
+    /// A fan-in read as a plain `Vec`. A `Vec<T>` is a socket type too, but
+    /// one link carrying a list is the rarer case, so it is the one that has
+    /// to say so, with `#[input(one)]`.
     Vec,
 }
 
@@ -597,6 +596,7 @@ fn parse_field(field: &syn::Field) -> syn::Result<ParsedField> {
     let mut max: Option<Expr> = None;
     let mut show_label = true;
     let mut is_input = false;
+    let mut one = None;
 
     for attr in &field.attrs {
         let input_attr = attr.path().is_ident("input");
@@ -624,10 +624,11 @@ fn parse_field(field: &syn::Field) -> syn::Result<ParsedField> {
                 "min" => min = Some(meta.value()?.parse()?),
                 "max" => max = Some(meta.value()?.parse()?),
                 "hide_label" => show_label = false,
+                "one" => one = Some(meta.path.clone()),
                 other => {
                     return Err(meta.error(format!(
                         "unknown field option `{other}`; expected label, description, \
-                         default, hint, min, max or hide_label"
+                         default, hint, min, max, hide_label or one"
                     )));
                 }
             }
@@ -640,9 +641,27 @@ fn parse_field(field: &syn::Field) -> syn::Result<ParsedField> {
     if !is_input && wrapped(&field.ty, "Vec").is_some() {
         return Err(syn::Error::new_spanned(
             &field.ty,
-            "a `Vec<T>` field takes many links, so it needs `#[input]`; \
-             for a list typed in by hand, use a `String` and split it",
+            "a `Vec<T>` field takes many links, so it needs `#[input]`, or \
+             `#[input(one)]` for one link carrying a list; for a list typed in \
+             by hand, use a `String` and split it",
         ));
+    }
+    // `one` only says the outer `Vec` is payload rather than arity; every
+    // other type is one link already.
+    if let Some(path) = &one {
+        if !is_input {
+            return Err(syn::Error::new_spanned(
+                path,
+                "`one` says how many links an input takes, so it belongs on `#[input]`",
+            ));
+        }
+        if wrapped(&field.ty, "Vec").is_none() {
+            return Err(syn::Error::new_spanned(
+                path,
+                "`one` only matters on a `Vec<T>` field, which otherwise takes many \
+                 links; this field takes one link already",
+            ));
+        }
     }
     // Likewise a param always holds a value — its widget's default if nothing
     // else — so `Option` only means something on a socket that may be unwired.
@@ -661,7 +680,11 @@ fn parse_field(field: &syn::Field) -> syn::Result<ParsedField> {
     }
 
     let role = if is_input {
-        let (arity, payload) = classify(&field.ty);
+        let (arity, payload) = if one.is_some() {
+            (Arity::Required, field.ty.clone())
+        } else {
+            classify(&field.ty)
+        };
         Role::Input {
             arity,
             payload: Box::new(payload),

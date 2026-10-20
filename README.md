@@ -155,6 +155,10 @@ without is link-only. `choice` wants a fieldless enum, the rest a one-field
 tuple struct over `String`, `i64`, `f64` or `bool`. Those four are wire types
 already, so a field that is just a string or a number needs no wrapper.
 
+So is a `Vec` of any wire type: `Vec<String>` registers as `List<Text>`, in
+Text's color with a square socket, and is link-only. A node can say
+`output = Vec<String>` without declaring a list type of its own.
+
 **`#[derive(NodeType)]` — a kind of node**
 
 | `#[node(…)]` | default | |
@@ -183,6 +187,8 @@ returning anything else from `evaluate`.
 | `#[input] x: Option<T>` | a link-only socket that may be wired |
 | `#[input] x: Vec<T>` | a socket accepting any number of links, in order |
 | `#[input] x: Multi<T>` | the same, also remembering which node each value came from |
+| `#[input(one)] x: Vec<T>` | a socket that must be wired, by one link carrying a list |
+| `#[input] x: Vec<Vec<T>>` | any number of links, each carrying a list |
 | `x: T` (no attribute) | a parameter, drawn in the body, never wired |
 
 | `#[input(…)]`, `#[param(…)]` | |

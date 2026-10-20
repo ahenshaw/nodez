@@ -102,6 +102,11 @@ impl DataTypeBuilder {
         self.ty.description = description.into();
         self
     }
+
+    /// The type as built so far, for deriving one type from another.
+    pub(crate) fn peek(&self) -> &DataType {
+        &self.ty
+    }
 }
 
 /// Pick a stable color for a socket type from its name.

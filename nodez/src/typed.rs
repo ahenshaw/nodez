@@ -53,15 +53,18 @@ pub type Payload = Box<dyn Any>;
     message = "`{Self}` cannot travel along a wire",
     label = "sockets and params must be a `SocketType`",
     note = "an `#[input]` of `Vec<T>` takes many links, each carrying a `T`",
-    note = "for one link carrying a whole list, declare a newtype: \
-            `#[derive(Clone, SocketType)] struct Names(Vec<String>);`"
+    note = "for one link carrying a whole list, write `#[input(one)]`"
 )]
 pub trait SocketType: Clone + 'static {
-    /// The name the type is registered under. Must be unique in a library.
-    const NAME: &'static str;
-
-    /// Color, shape and description, as the editor should draw it.
+    /// Name, color, shape and description, as the editor should draw it. The
+    /// name is what the type is registered under, so it must be unique in a
+    /// library.
     fn data_type() -> DataTypeBuilder;
+
+    /// The name [`SocketType::data_type`] registers.
+    fn name() -> String {
+        Self::data_type().peek().name.clone()
+    }
 
     /// The inline editor for an unconnected input. `None` means link-only.
     fn widget() -> Widget {
@@ -89,8 +92,6 @@ pub trait SocketType: Clone + 'static {
 macro_rules! primitive_socket_type {
     ($ty:ty, $name:literal, $r:literal, $g:literal, $b:literal, $widget:expr, $to:expr, $from:expr) => {
         impl SocketType for $ty {
-            const NAME: &'static str = $name;
-
             fn data_type() -> DataTypeBuilder {
                 DataTypeBuilder::new($name, egui::Color32::from_rgb($r, $g, $b))
             }
@@ -136,6 +137,23 @@ primitive_socket_type!(
     |b: &bool| Value::Bool(*b),
     Value::as_bool
 );
+
+/// A list of any socket type is one too, so a node can emit a list and a
+/// fan-in can gather lists. Its sockets are square, in the element's color,
+/// and link-only: there is no inline editor for a list.
+///
+/// On an `#[input]` the outer `Vec` still means many links, so a field takes
+/// one link carrying a list as `#[input(one)] x: Vec<T>`, and many such links
+/// as `#[input] x: Vec<Vec<T>>`.
+impl<T: SocketType> SocketType for Vec<T> {
+    fn data_type() -> DataTypeBuilder {
+        let element = T::data_type();
+        let element = element.peek();
+        DataTypeBuilder::new(format!("List<{}>", element.name), element.color)
+            .shape(crate::SocketShape::Square)
+            .description(format!("A list of {}", element.display()))
+    }
+}
 
 /// An input socket that accepts any number of links, remembering which node
 /// each value came from.
@@ -268,7 +286,7 @@ pub enum NodeError {
     #[error("`{socket}` carried a {found} where a {expected} was expected")]
     WrongType {
         socket: &'static str,
-        expected: &'static str,
+        expected: String,
         found: &'static str,
     },
     #[error("{0}")]
@@ -546,7 +564,7 @@ pub mod __private {
             .cloned()
             .ok_or(NodeError::WrongType {
                 socket,
-                expected: T::NAME,
+                expected: T::name(),
                 found: "another type",
             })
     }
