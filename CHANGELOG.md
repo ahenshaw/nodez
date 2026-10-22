@@ -8,6 +8,14 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- Every numeric width is a `SocketType`: `i8`, `i16`, `i32`, `isize`, `u8`,
+  `u16`, `u32`, `u64`, `usize` and `f32`, registered as `Int8` … `UIntSize`
+  and `Float32`, in Int's and Float's colors, with an inline editor clamped to
+  the type's range. Each is a distinct type, so an `f32` output does not
+  connect to an `f64` input.
+
 ## [0.8.0] — 2026-10-19
 
 A list no longer needs a newtype to travel along a wire: `Vec<T>` is a socket

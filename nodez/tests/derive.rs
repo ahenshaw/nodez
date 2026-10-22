@@ -157,3 +157,79 @@ fn a_list_travels_along_one_wire() {
     assert!(graph.connect(&library, (split_short, "out"), (join, "parts")).is_err());
     assert!(graph.connect(&library, (short, "out"), (last, "words")).is_err());
 }
+
+/// Every numeric width is a socket type of its own, with an inline editor.
+#[derive(Debug, NodeType)]
+#[node(output = f32)]
+struct Half {
+    #[input]
+    value: f32,
+}
+
+#[derive(Debug, NodeType)]
+#[node(output = u8)]
+struct Byte {
+    #[input]
+    value: u8,
+}
+
+#[derive(Debug, NodeType)]
+#[node(produces = f64)]
+struct Wide {
+    #[input]
+    value: f64,
+}
+
+struct Numbers;
+impl Fold for Numbers {}
+
+impl Evaluate<Numbers> for Half {
+    fn evaluate(&self) -> Result<f32, NodeError> {
+        Ok(self.value / 2.0)
+    }
+}
+impl Evaluate<Numbers> for Byte {
+    fn evaluate(&self) -> Result<u8, NodeError> {
+        Ok(self.value)
+    }
+}
+impl Evaluate<Numbers> for Wide {
+    fn evaluate(&self) -> Result<f64, NodeError> {
+        Ok(self.value)
+    }
+}
+
+#[test]
+fn every_numeric_width_travels_along_a_wire() {
+    let mut library = NodeLibrary::new();
+    let mut rules = Rules::<Numbers>::new();
+    rules.register_all::<(Half, Byte, Wide)>(&mut library);
+
+    let mut graph = Graph::new();
+    let half = library.id("half").unwrap();
+    let first = graph.add_node(&library, half, pos2(0.0, 0.0));
+    let second = graph.add_node(&library, half, pos2(200.0, 0.0));
+    graph.node_mut(first).unwrap().set_input_value("value", 3.0_f32);
+    graph.connect(&library, (first, "out"), (second, "value")).unwrap();
+
+    let halved = graph
+        .evaluate::<Payload, NodeError>(&library, second, |ctx| rules.run(&ctx))
+        .unwrap();
+    assert_eq!(*halved.downcast::<f32>().unwrap(), 0.75);
+
+    // A width is its own type, so an f32 does not feed an f64.
+    let wide = graph.add_node(&library, library.id("wide").unwrap(), pos2(400.0, 0.0));
+    assert!(graph.connect(&library, (first, "out"), (wide, "value")).is_err());
+
+    // An inline value outside the type's range is not read as that type.
+    let byte = graph.add_node(&library, library.id("byte").unwrap(), pos2(0.0, 80.0));
+    graph.node_mut(byte).unwrap().set_input_value("value", 200_i64);
+    let read = graph
+        .evaluate::<Payload, NodeError>(&library, byte, |ctx| rules.run(&ctx))
+        .unwrap();
+    assert_eq!(*read.downcast::<u8>().unwrap(), 200);
+    graph.node_mut(byte).unwrap().set_input_value("value", 300_i64);
+    assert!(graph
+        .evaluate::<Payload, NodeError>(&library, byte, |ctx| rules.run(&ctx))
+        .is_err());
+}

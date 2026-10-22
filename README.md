@@ -38,8 +38,9 @@ use nodez::eframe;
 use nodez::{Evaluate, Fold, Graph, NodeError, NodeLibrary, NodeType, Payload, Rules,
             SocketType};
 
-// 1. Values that travel along wires. String, i64, f64 and bool already are
-//    wire types; anything else you declare. The color comes from the name.
+// 1. Values that travel along wires. String, bool and every integer and float
+//    width already are wire types; anything else you declare. The color
+//    comes from the name.
 #[derive(Clone, Debug, SocketType)]
 struct Url(String);
 
@@ -152,8 +153,10 @@ Everything is optional; the second column is what you get if you say nothing.
 
 A type with a `widget` can be typed into when nothing is wired to it; one
 without is link-only. `choice` wants a fieldless enum, the rest a one-field
-tuple struct over `String`, `i64`, `f64` or `bool`. Those four are wire types
-already, so a field that is just a string or a number needs no wrapper.
+tuple struct over `String`, `i64`, `f64` or `bool`. Those are wire types
+already, as are the other numeric widths (`f32`, `i32`, `u8`, `usize`, …), so a
+field that is just a string or a number needs no wrapper. Each width is its own
+type: `f64` is Float and `f32` is Float32, and the two do not connect.
 
 So is a `Vec` of any wire type: `Vec<String>` registers as `List<Text>`, in
 Text's color with a square socket, and is link-only. A node can say

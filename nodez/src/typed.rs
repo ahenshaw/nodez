@@ -131,6 +131,40 @@ primitive_socket_type!(
     |n: &f64| Value::Float(*n),
     Value::as_f64
 );
+/// The other numeric widths are socket types of their own, in the colors of
+/// Int and Float. Each is a distinct type: an `f32` output does not connect to
+/// an `f64` input, since a wire carries the value as it was produced.
+macro_rules! int_socket_type {
+    ($($ty:ty => $name:literal),* $(,)?) => {$(
+        primitive_socket_type!(
+            $ty, $name, 0x59, 0x8C, 0x5C,
+            Widget::int_range(
+                i64::try_from(<$ty>::MIN).unwrap_or(i64::MIN),
+                i64::try_from(<$ty>::MAX).unwrap_or(i64::MAX),
+            ),
+            |n: &$ty| Value::Int(i64::try_from(*n).unwrap_or(i64::MAX)),
+            |v: &Value| v.as_i64().and_then(|n| <$ty>::try_from(n).ok())
+        );
+    )*};
+}
+
+int_socket_type!(
+    i8 => "Int8",
+    i16 => "Int16",
+    i32 => "Int32",
+    isize => "IntSize",
+    u8 => "UInt8",
+    u16 => "UInt16",
+    u32 => "UInt32",
+    u64 => "UInt64",
+    usize => "UIntSize",
+);
+primitive_socket_type!(
+    f32, "Float32", 0xA1, 0xA1, 0xA1,
+    Widget::float(),
+    |n: &f32| Value::Float(f64::from(*n)),
+    |v: &Value| v.as_f64().map(|n| n as f32)
+);
 primitive_socket_type!(
     bool, "Bool", 0xCC, 0xA6, 0xD6,
     Widget::Checkbox,
