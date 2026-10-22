@@ -8,6 +8,10 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.8.3] — 2026-10-22
+
+A struct of plain data can be its own node, with no `evaluate` to write.
+
 ### Added
 
 - `#[node(output = Self)]` and `#[node(produces = Self)]` (or the struct's own
@@ -459,7 +463,8 @@ First release: a Blender-style node editor widget for egui, with a typed,
 traversable graph model, `#[derive(NodeType)]` for describing nodes as Rust
 types, and a ready-made editor window behind the `app` feature.
 
-[Unreleased]: https://github.com/ahenshaw/nodez/compare/v0.8.2...HEAD
+[Unreleased]: https://github.com/ahenshaw/nodez/compare/v0.8.3...HEAD
+[0.8.3]: https://github.com/ahenshaw/nodez/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/ahenshaw/nodez/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/ahenshaw/nodez/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/ahenshaw/nodez/compare/v0.7.1...v0.8.0
