@@ -647,6 +647,7 @@ fn spare(taken: &mut HashSet<String>, want: String) -> String {
 ///
 /// Read off the names a graph carries — see [`Graph::name_templates`] — so a
 /// graph saved without them cannot be checked and is taken on trust.
+#[cfg(feature = "serde")]
 fn missing(graph: &Graph, library: &NodeLibrary) -> Vec<String> {
     let mut names: Vec<String> = graph
         .template_names()
