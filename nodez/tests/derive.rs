@@ -1,6 +1,9 @@
 //! The derive, read back through a real graph.
 
+use std::collections::{BTreeMap, HashMap};
+
 use nodez::egui::pos2;
+use nodez::typed::SocketType;
 use nodez::{Evaluate, Fold, Graph, Multi, NodeError, NodeLibrary, NodeType, Payload, Rules};
 
 #[derive(Debug, NodeType)]
@@ -156,6 +159,87 @@ fn a_list_travels_along_one_wire() {
     let join = graph.add_node(&library, library.id("join").unwrap(), pos2(400.0, 160.0));
     assert!(graph.connect(&library, (split_short, "out"), (join, "parts")).is_err());
     assert!(graph.connect(&library, (short, "out"), (last, "words")).is_err());
+}
+
+/// A map between socket types travels along one wire, and a `HashMap` and a
+/// `BTreeMap` of the same types are distinct sockets.
+#[derive(Debug, NodeType)]
+#[node(output = HashMap<String, u32>)]
+struct Tally {
+    #[input]
+    text: String,
+}
+
+#[derive(Debug, NodeType)]
+#[node(output = BTreeMap<String, u32>)]
+struct Sorted {
+    #[input]
+    tally: HashMap<String, u32>,
+}
+
+#[derive(Debug, NodeType)]
+#[node(produces = u32)]
+struct Most {
+    #[input]
+    tally: HashMap<String, u32>,
+}
+
+impl Evaluate<Text> for Tally {
+    fn evaluate(&self) -> Result<HashMap<String, u32>, NodeError> {
+        let mut tally = HashMap::new();
+        for word in self.text.split(' ') {
+            *tally.entry(word.to_owned()).or_default() += 1;
+        }
+        Ok(tally)
+    }
+}
+impl Evaluate<Text> for Sorted {
+    fn evaluate(&self) -> Result<BTreeMap<String, u32>, NodeError> {
+        Ok(self.tally.clone().into_iter().collect())
+    }
+}
+impl Evaluate<Text> for Most {
+    fn evaluate(&self) -> Result<u32, NodeError> {
+        Ok(self.tally.values().copied().max().unwrap_or(0))
+    }
+}
+
+#[test]
+fn a_map_travels_along_one_wire() {
+    assert_eq!(<HashMap<String, u32>>::name(), "Map<Text, UInt32>");
+    assert_eq!(<BTreeMap<String, u32>>::name(), "SortedMap<Text, UInt32>");
+
+    let mut library = NodeLibrary::new();
+    let mut rules = Rules::<Text>::new();
+    rules.register_all::<(Word, Tally, Sorted, Most)>(&mut library);
+
+    let mut graph = Graph::new();
+    let word = graph.add_node(&library, library.id("word").unwrap(), pos2(0.0, 0.0));
+    graph.node_mut(word).unwrap().set_input_value("value", "a b a c a");
+    let tally = graph.add_node(&library, library.id("tally").unwrap(), pos2(200.0, 0.0));
+    let most = graph.add_node(&library, library.id("most").unwrap(), pos2(400.0, 0.0));
+    let sorted = graph.add_node(&library, library.id("sorted").unwrap(), pos2(400.0, 80.0));
+    graph.connect(&library, (word, "out"), (tally, "text")).unwrap();
+    graph.connect(&library, (tally, "out"), (most, "tally")).unwrap();
+    graph.connect(&library, (tally, "out"), (sorted, "tally")).unwrap();
+    // An `#[input]` of a map is one link, not a fan-in.
+    let spec = &library.get(library.id("most").unwrap()).unwrap().inputs[0];
+    assert!(!spec.multi);
+
+    let value = graph
+        .evaluate::<Payload, NodeError>(&library, most, |ctx| rules.run(&ctx))
+        .unwrap();
+    assert_eq!(*value.downcast::<u32>().unwrap(), 3);
+    let value = graph
+        .evaluate::<Payload, NodeError>(&library, sorted, |ctx| rules.run(&ctx))
+        .unwrap();
+    let sorted_map = value.downcast::<BTreeMap<String, u32>>().unwrap();
+    assert_eq!(sorted_map.keys().collect::<Vec<_>>(), ["a", "b", "c"]);
+
+    // A sorted map is not a map, and a map is not its keys.
+    let other = graph.add_node(&library, library.id("most").unwrap(), pos2(600.0, 0.0));
+    assert!(graph.connect(&library, (sorted, "out"), (other, "tally")).is_err());
+    assert!(graph.connect(&library, (word, "out"), (other, "tally")).is_err());
 }
 
 /// Every numeric width is a socket type of its own, with an inline editor.

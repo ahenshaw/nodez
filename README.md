@@ -162,7 +162,10 @@ connect.
 
 So is a `Vec` of any wire type: `Vec<String>` registers as `List<Text>`, in
 Text's color with a square socket, and is link-only. A node can say
-`output = Vec<String>` without declaring a list type of its own.
+`output = Vec<String>` without declaring a list type of its own. A map is the
+same: `HashMap<String, f64>` registers as `Map<Text, Float>` and
+`BTreeMap<String, f64>` as `SortedMap<Text, Float>`, in the value's color, and
+the two do not connect.
 
 **`#[derive(NodeType)]` — a kind of node**
 

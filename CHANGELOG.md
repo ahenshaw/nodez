@@ -8,6 +8,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- `HashMap<K, V>` and `BTreeMap<K, V>` are `SocketType`s for every pair of
+  socket types, registered as `Map<…, …>` and `SortedMap<…, …>` in the value's
+  color with a square socket, link-only. The two are distinct types, so a
+  `HashMap` output does not connect to a `BTreeMap` input.
+
 ## [0.8.1] — 2026-10-22
 
 A field that is any integer width or an `f32` travels along a wire without a

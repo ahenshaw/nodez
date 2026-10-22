@@ -26,7 +26,7 @@
 //! ```
 
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::ops::Deref;
 
@@ -188,6 +188,35 @@ impl<T: SocketType> SocketType for Vec<T> {
             .description(format!("A list of {}", element.display()))
     }
 }
+
+/// A map between any two socket types is one too, registered as
+/// `Map<K, V>` for a `HashMap` and `SortedMap<K, V>` for a `BTreeMap`. The two
+/// are distinct types, since a wire carries the value as it was produced. Like
+/// a list, its sockets are square, in the value's color, and link-only.
+macro_rules! map_socket_type {
+    ($map:ident, $name:literal, $what:literal) => {
+        impl<K: SocketType, V: SocketType> SocketType for $map<K, V> {
+            fn data_type() -> DataTypeBuilder {
+                let key = K::data_type();
+                let key = key.peek();
+                let value = V::data_type();
+                let value = value.peek();
+                let name = format!("{}<{}, {}>", $name, key.name, value.name);
+                DataTypeBuilder::new(name, value.color)
+                    .shape(crate::SocketShape::Square)
+                    .description(format!(
+                        "{} from {} to {}",
+                        $what,
+                        key.display(),
+                        value.display()
+                    ))
+            }
+        }
+    };
+}
+
+map_socket_type!(HashMap, "Map", "A map");
+map_socket_type!(BTreeMap, "SortedMap", "A sorted map");
 
 /// An input socket that accepts any number of links, remembering which node
 /// each value came from.
