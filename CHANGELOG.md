@@ -8,6 +8,10 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.8.2] — 2026-10-22
+
+A map travels along a wire without a newtype.
+
 ### Added
 
 - `HashMap<K, V>` and `BTreeMap<K, V>` are `SocketType`s for every pair of
@@ -441,7 +445,8 @@ First release: a Blender-style node editor widget for egui, with a typed,
 traversable graph model, `#[derive(NodeType)]` for describing nodes as Rust
 types, and a ready-made editor window behind the `app` feature.
 
-[Unreleased]: https://github.com/ahenshaw/nodez/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/ahenshaw/nodez/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/ahenshaw/nodez/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/ahenshaw/nodez/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/ahenshaw/nodez/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/ahenshaw/nodez/compare/v0.7.0...v0.7.1
