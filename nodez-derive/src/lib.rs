@@ -133,7 +133,12 @@ fn newtype_editor(input: &DeriveInput, widget: &str) -> syn::Result<TokenStream2
         "int" => (INTS, format!("an integer ({})", INTS.join(", "))),
         _ => (FLOATS, format!("a float ({})", FLOATS.join(", "))),
     };
-    if !accepted.iter().any(|name| is_type(&inner, name)) {
+    // Only a primitive of the wrong kind is rejected. Anything else, such as
+    // an alias for `i64`, cannot be told apart here, so it gets its own
+    // editor and the trait bound checks it is a socket type at all.
+    let primitive = |name: &&str| is_type(&inner, name);
+    let known = ["String", "bool"].iter().chain(INTS).chain(FLOATS).any(primitive);
+    if known && !accepted.iter().any(primitive) {
         return Err(syn::Error::new_spanned(
             &inner,
             format!("#[socket(widget = {widget})] needs a one-field tuple struct over {over}"),
