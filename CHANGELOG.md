@@ -15,6 +15,10 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and `Float32`, in Int's and Float's colors, with an inline editor clamped to
   the type's range. Each is a distinct type, so an `f32` output does not
   connect to an `f64` input.
+- `#[socket(widget = int)]` and `#[socket(widget = float)]` take a newtype
+  over any integer width or `f32`, not just `i64` and `f64`. The newtype uses
+  its field's editor, so a `u8` newtype is clamped to 0–255, and a field of
+  the wrong kind is a compile error naming the types that fit.
 
 ## [0.8.0] — 2026-10-19
 

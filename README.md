@@ -153,9 +153,10 @@ Everything is optional; the second column is what you get if you say nothing.
 
 A type with a `widget` can be typed into when nothing is wired to it; one
 without is link-only. `choice` wants a fieldless enum, the rest a one-field
-tuple struct over `String`, `i64`, `f64` or `bool`. Those are wire types
-already, as are the other numeric widths (`f32`, `i32`, `u8`, `usize`, …), so a
-field that is just a string or a number needs no wrapper. Each width is its own
+tuple struct: `text` over `String`, `checkbox` over `bool`, `int` over any
+integer and `float` over `f32` or `f64`. The newtype takes its field's editor,
+so `struct Level(u8)` is clamped to 0–255. Those field types are wire types
+already, so a field that is just a string or a number needs no wrapper. Each width is its own
 type: `f64` is Float and `f32` is Float32, and the two do not connect.
 
 So is a `Vec` of any wire type: `Vec<String>` registers as `List<Text>`, in

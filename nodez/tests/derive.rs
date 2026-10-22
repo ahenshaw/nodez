@@ -233,3 +233,48 @@ fn every_numeric_width_travels_along_a_wire() {
         .evaluate::<Payload, NodeError>(&library, byte, |ctx| rules.run(&ctx))
         .is_err());
 }
+
+/// A newtype takes its field's editor, so any width can be typed in.
+#[derive(Clone, Debug, PartialEq, nodez::SocketType)]
+#[socket(widget = float)]
+struct Gain(f32);
+
+#[derive(Clone, Debug, PartialEq, nodez::SocketType)]
+#[socket(widget = int)]
+struct Level(u8);
+
+#[derive(Debug, NodeType)]
+#[node(produces = f32)]
+struct Amplify {
+    #[input(default = 0.5)]
+    gain: Gain,
+    #[input]
+    level: Level,
+}
+
+impl Evaluate<Numbers> for Amplify {
+    fn evaluate(&self) -> Result<f32, NodeError> {
+        Ok(self.gain.0 * f32::from(self.level.0))
+    }
+}
+
+#[test]
+fn a_newtype_over_any_width_is_editable() {
+    use nodez::{SocketType, Value, Widget};
+
+    assert_eq!(Level::widget(), Widget::int_range(0, 255));
+    assert_eq!(Level::from_value(&Value::Int(300)), None);
+    assert_eq!(Gain::from_value(&Gain(1.5).to_value()), Some(Gain(1.5)));
+
+    let mut library = NodeLibrary::new();
+    let mut rules = Rules::<Numbers>::new();
+    rules.register_all::<(Amplify,)>(&mut library);
+
+    let mut graph = Graph::new();
+    let amplify = graph.add_node(&library, library.id("amplify").unwrap(), pos2(0.0, 0.0));
+    graph.node_mut(amplify).unwrap().set_input_value("level", 10_i64);
+    let out = graph
+        .evaluate::<Payload, NodeError>(&library, amplify, |ctx| rules.run(&ctx))
+        .unwrap();
+    assert_eq!(*out.downcast::<f32>().unwrap(), 5.0);
+}

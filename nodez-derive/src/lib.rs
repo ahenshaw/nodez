@@ -89,12 +89,7 @@ fn socket_type_impl(input: &DeriveInput) -> syn::Result<TokenStream2> {
     // link-only, which is what the trait defaults give.
     let editor = match attrs.widget.as_ref().map(ToString::to_string).as_deref() {
         None => quote! {},
-        Some("text") => newtype_editor(input, quote!(::nodez::Widget::text()), Scalar::Text)?,
-        Some("int") => newtype_editor(input, quote!(::nodez::Widget::int()), Scalar::Int)?,
-        Some("float") => newtype_editor(input, quote!(::nodez::Widget::float()), Scalar::Float)?,
-        Some("checkbox") => {
-            newtype_editor(input, quote!(::nodez::Widget::Checkbox), Scalar::Bool)?
-        }
+        Some(widget @ ("text" | "int" | "float" | "checkbox")) => newtype_editor(input, widget)?,
         Some("choice") => choice_editor(input)?,
         Some(other) => {
             return Err(syn::Error::new_spanned(
@@ -124,42 +119,36 @@ fn socket_type_impl(input: &DeriveInput) -> syn::Result<TokenStream2> {
     })
 }
 
-enum Scalar {
-    Text,
-    Int,
-    Float,
-    Bool,
-}
+/// The inner types each widget can edit. All are socket types already.
+const INTS: &[&str] = &["i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize"];
+const FLOATS: &[&str] = &["f32", "f64"];
 
-/// The `to_value` / `from_value` pair for a one-field tuple struct.
-fn newtype_editor(
-    input: &DeriveInput,
-    widget: TokenStream2,
-    scalar: Scalar,
-) -> syn::Result<TokenStream2> {
-    newtype_field(input)?;
-    let (to, from) = match scalar {
-        Scalar::Text => (
-            quote!(::nodez::Value::Text(self.0.clone())),
-            quote!(value.as_str().map(|s| Self(s.to_owned()))),
-        ),
-        Scalar::Int => (
-            quote!(::nodez::Value::Int(self.0)),
-            quote!(value.as_i64().map(Self)),
-        ),
-        Scalar::Float => (
-            quote!(::nodez::Value::Float(self.0)),
-            quote!(value.as_f64().map(Self)),
-        ),
-        Scalar::Bool => (
-            quote!(::nodez::Value::Bool(self.0)),
-            quote!(value.as_bool().map(Self)),
-        ),
+/// The editor for a one-field tuple struct is its field's: the same widget,
+/// clamped to the field's range, and the same `to_value` / `from_value`.
+fn newtype_editor(input: &DeriveInput, widget: &str) -> syn::Result<TokenStream2> {
+    let inner = newtype_field(input)?;
+    let (accepted, over) = match widget {
+        "text" => (&["String"][..], "`String`".to_owned()),
+        "checkbox" => (&["bool"][..], "`bool`".to_owned()),
+        "int" => (INTS, format!("an integer ({})", INTS.join(", "))),
+        _ => (FLOATS, format!("a float ({})", FLOATS.join(", "))),
     };
+    if !accepted.iter().any(|name| is_type(&inner, name)) {
+        return Err(syn::Error::new_spanned(
+            &inner,
+            format!("#[socket(widget = {widget})] needs a one-field tuple struct over {over}"),
+        ));
+    }
     Ok(quote! {
-        fn widget() -> ::nodez::Widget { #widget }
-        fn to_value(&self) -> ::nodez::Value { #to }
-        fn from_value(value: &::nodez::Value) -> Option<Self> { #from }
+        fn widget() -> ::nodez::Widget {
+            <#inner as ::nodez::typed::SocketType>::widget()
+        }
+        fn to_value(&self) -> ::nodez::Value {
+            ::nodez::typed::SocketType::to_value(&self.0)
+        }
+        fn from_value(value: &::nodez::Value) -> Option<Self> {
+            <#inner as ::nodez::typed::SocketType>::from_value(value).map(Self)
+        }
     })
 }
 
