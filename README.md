@@ -156,8 +156,9 @@ without is link-only. `choice` wants a fieldless enum, the rest a one-field
 tuple struct: `text` over `String`, `checkbox` over `bool`, `int` over any
 integer and `float` over `f32` or `f64`. The newtype takes its field's editor,
 so `struct Level(u8)` is clamped to 0–255. Those field types are wire types
-already, so a field that is just a string or a number needs no wrapper. Each width is its own
-type: `f64` is Float and `f32` is Float32, and the two do not connect.
+already, so a field that is just a string or a number needs no wrapper. Each
+width is its own type: `f64` is Float and `f32` is Float32, and the two do not
+connect.
 
 So is a `Vec` of any wire type: `Vec<String>` registers as `List<Text>`, in
 Text's color with a square socket, and is link-only. A node can say
