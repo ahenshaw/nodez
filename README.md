@@ -187,6 +187,60 @@ also puts a socket on the node. A node with nothing downstream — the root of a
 document, say — uses `produces`. Giving both is a compile error, and so is
 returning anything else from `evaluate`.
 
+A struct of plain data can be its own node. Say `output = Self` (and derive
+`SocketType` too, so it can travel along a wire) or `produces = Self` at the
+root, and the derive writes `evaluate` for you, in every fold: the node's
+inputs fill the struct's fields, and the struct is what comes out. A tree of
+config structs then needs no code beyond the derives:
+
+```rust
+#[derive(Clone, Debug, SocketType, NodeType)]
+#[node(output = Self)]
+struct Vehicle {
+    #[input(default = "uav-1")]
+    name: String,
+    #[input(default = 12.0)]
+    max_speed: f64,
+}
+
+#[derive(Clone, Debug, NodeType)]
+#[node(produces = Self)]
+struct MissionConfig {
+    #[input]
+    vehicles: Vec<Vehicle>,
+}
+```
+
+Such a node cannot have an `evaluate` of its own; one that must check its
+inputs names a different output type.
+
+A struct of plain data can be its own node. Say `output = Self` (and derive
+`SocketType` too, so it can travel along a wire) or `produces = Self` at the
+root, and the derive writes `evaluate` for you, in every fold: the node's
+inputs fill the struct's fields, and the struct is what comes out. A tree of
+config structs then needs no code beyond the derives:
+
+```rust
+#[derive(Clone, Debug, SocketType, NodeType)]
+#[node(output = Self)]
+struct Vehicle {
+    #[input(default = "uav-1")]
+    name: String,
+    #[input(default = 12.0)]
+    max_speed: f64,
+}
+
+#[derive(Clone, Debug, NodeType)]
+#[node(produces = Self)]
+struct MissionConfig {
+    #[input]
+    vehicles: Vec<Vehicle>,
+}
+```
+
+Such a node cannot have an `evaluate` of its own; one that must check its
+inputs names a different output type.
+
 **Fields**
 
 | you write | you get |

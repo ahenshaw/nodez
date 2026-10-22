@@ -3,8 +3,9 @@
 use std::collections::{BTreeMap, HashMap};
 
 use nodez::egui::pos2;
-use nodez::typed::SocketType;
-use nodez::{Evaluate, Fold, Graph, Multi, NodeError, NodeLibrary, NodeType, Payload, Rules};
+use nodez::{
+    Evaluate, Fold, Graph, Multi, NodeError, NodeLibrary, NodeType, Payload, Rules, SocketType,
+};
 
 #[derive(Debug, NodeType)]
 #[node(output = String)]
@@ -240,6 +241,56 @@ fn a_map_travels_along_one_wire() {
     let other = graph.add_node(&library, library.id("most").unwrap(), pos2(600.0, 0.0));
     assert!(graph.connect(&library, (sorted, "out"), (other, "tally")).is_err());
     assert!(graph.connect(&library, (word, "out"), (other, "tally")).is_err());
+}
+
+/// A struct that is its own output needs no `Evaluate`: the derive writes one
+/// that clones it, for every fold.
+#[derive(Clone, Debug, PartialEq, SocketType, NodeType)]
+#[node(output = Self)]
+struct Vehicle {
+    #[input(default = "uav-1")]
+    name: String,
+    #[input(default = 12.0)]
+    max_speed: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, NodeType)]
+#[node(produces = MissionConfig)]
+struct MissionConfig {
+    #[input(default = "survey")]
+    name: String,
+    #[input]
+    vehicles: Vec<Vehicle>,
+}
+
+struct Report;
+impl Fold for Report {}
+
+#[test]
+fn a_struct_that_produces_itself_evaluates_itself() {
+    fn build<F: Fold>() -> MissionConfig {
+        let mut library = NodeLibrary::new();
+        let mut rules = Rules::<F>::new();
+        rules.register_all::<(Vehicle, MissionConfig)>(&mut library);
+
+        let mut graph = Graph::new();
+        let vehicle = library.id("vehicle").unwrap();
+        let first = graph.add_node(&library, vehicle, pos2(0.0, 0.0));
+        let second = graph.add_node(&library, vehicle, pos2(0.0, 80.0));
+        graph.node_mut(second).unwrap().set_input_value("name", "uav-2");
+        let mission = graph.add_node(&library, library.id("mission_config").unwrap(), pos2(200.0, 0.0));
+        graph.connect(&library, (first, "out"), (mission, "vehicles")).unwrap();
+        graph.connect(&library, (second, "out"), (mission, "vehicles")).unwrap();
+        let value = graph
+            .evaluate::<Payload, NodeError>(&library, mission, |ctx| rules.run(&ctx))
+            .unwrap();
+        *value.downcast::<MissionConfig>().unwrap()
+    }
+
+    let uav = |name: &str| Vehicle { name: name.to_owned(), max_speed: 12.0 };
+    let expected = MissionConfig { name: "survey".to_owned(), vehicles: vec![uav("uav-1"), uav("uav-2")] };
+    assert_eq!(build::<Text>(), expected);
+    assert_eq!(build::<Report>(), expected);
 }
 
 /// Every numeric width is a socket type of its own, with an inline editor.

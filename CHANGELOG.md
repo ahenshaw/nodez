@@ -8,6 +8,20 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- `#[node(output = Self)]` and `#[node(produces = Self)]` (or the struct's own
+  name) make a struct its own node: the derive writes `Evaluate` for every
+  fold, cloning the struct its inputs filled in. A tree of plain config
+  structs needs nothing but the derives.
+
+### Added
+
+- `#[node(output = Self)]` and `#[node(produces = Self)]` (or the struct's own
+  name) make a struct its own node: the derive writes `Evaluate` for every
+  fold, cloning the struct its inputs filled in. A tree of plain config
+  structs needs nothing but the derives.
+
 ## [0.8.2] — 2026-10-22
 
 A map travels along a wire without a newtype.

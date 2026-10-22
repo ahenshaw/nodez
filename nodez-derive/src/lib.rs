@@ -525,6 +525,25 @@ fn node_impl(input: &DeriveInput) -> syn::Result<TokenStream2> {
         (None, None) => quote!(()),
     };
 
+    // A node that produces itself is a struct of plain data: the reader has
+    // already filled every field, so evaluating it is a clone, in every fold.
+    let evaluate = if attrs
+        .output
+        .as_ref()
+        .or(attrs.produces.as_ref())
+        .is_some_and(|ty| names_self(ty, ident))
+    {
+        quote! {
+            impl<__F: ::nodez::typed::Fold> ::nodez::typed::Evaluate<__F> for #ident {
+                fn evaluate(&self) -> ::core::result::Result<Self, ::nodez::typed::NodeError> {
+                    Ok(::core::clone::Clone::clone(self))
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     Ok(quote! {
         impl ::nodez::typed::NodeType for #ident {
             const ID: &'static str = #id;
@@ -551,7 +570,15 @@ fn node_impl(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 Ok(Self { #(#reads),* })
             }
         }
+
+        #evaluate
     })
+}
+
+/// `Self`, or the struct's own name.
+fn names_self(ty: &Type, ident: &Ident) -> bool {
+    matches!(ty, Type::Path(p) if p.qself.is_none()
+        && (p.path.is_ident("Self") || p.path.is_ident(ident)))
 }
 
 enum Arity {
