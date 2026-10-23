@@ -38,13 +38,7 @@ use nodez::eframe;
 use nodez::{Evaluate, Fold, Graph, NodeError, NodeLibrary, NodeType, Payload, Rules,
             SocketType};
 
-// 1. Values that travel along wires. String, bool and every integer and float
-//    width already are wire types; anything else you declare. The color
-//    comes from the name.
-#[derive(Clone, Debug, SocketType)]
-struct Url(String);
-
-// 2. Kinds of node. A field with #[input] is a socket, a bare field is a
+// 1. Kinds of node. A field with #[input] is a socket, a bare field is a
 //    parameter drawn in the body, and the field's type does the rest.
 #[derive(Debug, NodeType)]
 #[node(category = "Input", output = String)]
@@ -62,8 +56,10 @@ struct Join {
     parts: Vec<String>,            // Vec: accepts any number of links
 }
 
-#[derive(Debug, NodeType)]
-#[node(category = "Build", output = Url)]
+// A struct of plain data can be its own node and its own wire type. Its
+// inputs fill its fields and it is what comes out, so it needs no evaluate.
+#[derive(Clone, Debug, SocketType, NodeType)]
+#[node(category = "Build", output = Self)]
 struct Address {
     #[input(default = "example.com")]
     host: String,
@@ -77,11 +73,11 @@ struct Address {
 #[node(category = "Output", produces = String)]
 struct Collect {
     #[input]
-    urls: Vec<Url>,                // Url has no editor, so this is link-only
+    addresses: Vec<Address>,       // Address has no editor: link-only
 }
 
-// 3. What each kind does. A `Fold` names one way of walking the graph. It is
-//    unrelated to a category, which only groups nodes in the menu.
+// 2. What the other kinds do. A `Fold` names one way of walking the graph. It
+//    is unrelated to a category, which only groups nodes in the menu.
 struct Urls;
 impl Fold for Urls {}
 
@@ -93,19 +89,20 @@ impl Evaluate<Urls> for Join {
         Ok(self.parts.join(&self.separator))
     }
 }
-impl Evaluate<Urls> for Address {
-    fn evaluate(&self) -> Result<Url, NodeError> {
-        let scheme = if self.port == 443 { "https" } else { "http" };
-        Ok(Url(format!("{scheme}://{}:{}/{}", self.host, self.port, self.path)))
-    }
-}
 impl Evaluate<Urls> for Collect {
     fn evaluate(&self) -> Result<String, NodeError> {
-        Ok(self.urls.iter().map(|u| u.0.as_str()).collect::<Vec<_>>().join("\n"))
+        Ok(self.addresses.iter().map(Address::url).collect::<Vec<_>>().join("\n"))
     }
 }
 
-// 4. A window.
+impl Address {
+    fn url(&self) -> String {
+        let scheme = if self.port == 443 { "https" } else { "http" };
+        format!("{scheme}://{}:{}/{}", self.host, self.port, self.path)
+    }
+}
+
+// 3. A window.
 fn main() -> eframe::Result {
     let mut library = NodeLibrary::new();
     let mut rules = Rules::<Urls>::new();

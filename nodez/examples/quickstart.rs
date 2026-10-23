@@ -8,17 +8,10 @@ use nodez::{
     Evaluate, Fold, Graph, NodeError, NodeLibrary, NodeType, Payload, Rules, SocketType,
 };
 
-// 1. The values that travel along wires. `String`, `i64`, `f64` and `bool` are
-//    already wire types; anything else you declare. The color comes from the
-//    name, so there is nothing to choose.
-#[derive(Clone, Debug, SocketType)]
-#[socket(description = "A complete URL.")]
-struct Url(String);
-
-// 2. The kinds of node. A field with `#[input]` is a socket; a bare field is a
+// 1. The kinds of node. A field with `#[input]` is a socket; a bare field is a
 //    parameter drawn in the node body. The field's type decides the rest:
-//    `Vec<T>` accepts many links, and a type with no inline editor — like
-//    `Url` — makes a socket that can only be wired.
+//    `String`, the numbers and `bool` get an inline editor, and `Vec<T>`
+//    accepts many links.
 #[derive(Debug, NodeType)]
 #[node(category = "Input", output = String)]
 struct Text {
@@ -35,8 +28,13 @@ struct Join {
     parts: Vec<String>,
 }
 
-#[derive(Debug, NodeType)]
-#[node(category = "Build", output = Url)]
+// A struct of plain data can be its own node and its own wire type. With
+// `output = Self` its inputs fill its fields and it is what comes out, so it
+// needs no `evaluate`. The wire color comes from the name. It has no inline
+// editor, so a socket taking an `Address` can only be wired.
+#[derive(Clone, Debug, SocketType, NodeType)]
+#[socket(description = "Where a page lives.")]
+#[node(category = "Build", output = Self)]
 struct Address {
     #[input(default = "example.com")]
     host: String,
@@ -50,10 +48,17 @@ struct Address {
 #[node(category = "Output", produces = String)]
 struct Collect {
     #[input]
-    urls: Vec<Url>,
+    addresses: Vec<Address>,
 }
 
-// 3. What each kind does. `Fold` names one way of walking the graph — named
+impl Address {
+    fn url(&self) -> String {
+        let scheme = if self.port == 443 { "https" } else { "http" };
+        format!("{scheme}://{}:{}/{}", self.host, self.port, self.path)
+    }
+}
+
+// 2. What the other kinds do. `Fold` names one way of walking the graph — named
 //    after what it produces, like a category is named after what it groups.
 //    The two are unrelated; you can add more folds without touching the nodes.
 struct Urls;
@@ -71,16 +76,9 @@ impl Evaluate<Urls> for Join {
     }
 }
 
-impl Evaluate<Urls> for Address {
-    fn evaluate(&self) -> Result<Url, NodeError> {
-        let scheme = if self.port == 443 { "https" } else { "http" };
-        Ok(Url(format!("{scheme}://{}:{}/{}", self.host, self.port, self.path)))
-    }
-}
-
 impl Evaluate<Urls> for Collect {
     fn evaluate(&self) -> Result<String, NodeError> {
-        Ok(self.urls.iter().map(|u| u.0.as_str()).collect::<Vec<_>>().join("\n"))
+        Ok(self.addresses.iter().map(Address::url).collect::<Vec<_>>().join("\n"))
     }
 }
 
@@ -128,7 +126,7 @@ fn starting_graph(library: &NodeLibrary) -> Graph {
         (docs, path, "parts"),
         (page, path, "parts"),
         (path, address, "path"),
-        (address, collect, "urls"),
+        (address, collect, "addresses"),
     ] {
         graph.connect(library, (from, "out"), (to, socket)).unwrap();
     }

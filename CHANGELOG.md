@@ -8,6 +8,12 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- The quickstart, in the README and as an example, makes `Address` its own
+  node and wire type with `output = Self`, in place of a `Url` newtype and an
+  `evaluate` that built it.
+
 ## [0.8.3] — 2026-10-22
 
 A struct of plain data can be its own node, with no `evaluate` to write.
