@@ -8,6 +8,10 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.8.4] — 2026-10-22
+
+The quickstart shows a struct that is its own node.
+
 ### Changed
 
 - The quickstart, in the README and as an example, makes `Address` its own
@@ -469,7 +473,8 @@ First release: a Blender-style node editor widget for egui, with a typed,
 traversable graph model, `#[derive(NodeType)]` for describing nodes as Rust
 types, and a ready-made editor window behind the `app` feature.
 
-[Unreleased]: https://github.com/ahenshaw/nodez/compare/v0.8.3...HEAD
+[Unreleased]: https://github.com/ahenshaw/nodez/compare/v0.8.4...HEAD
+[0.8.4]: https://github.com/ahenshaw/nodez/compare/v0.8.3...v0.8.4
 [0.8.3]: https://github.com/ahenshaw/nodez/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/ahenshaw/nodez/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/ahenshaw/nodez/compare/v0.8.0...v0.8.1
